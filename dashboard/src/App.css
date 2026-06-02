@@ -1,0 +1,148 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f5f7fb;
+}
+
+.page {
+  font-family: Arial, sans-serif;
+  padding: 24px;
+  background: #f5f7fb;
+  min-height: 100vh;
+  color: #172033;
+}
+
+.header {
+  margin-bottom: 24px;
+}
+
+.header h1 {
+  margin-bottom: 8px;
+  font-size: 32px;
+}
+
+.header p {
+  margin: 0;
+  color: #526079;
+  font-size: 16px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.card {
+  background: white;
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  margin-bottom: 16px;
+}
+
+.card h2 {
+  margin-top: 0;
+  color: #07152e;
+}
+
+.card h3 {
+  color: #07152e;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.node-card {
+  border: 1px solid #d9e0ef;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fbfcff;
+}
+
+.node-card h3 {
+  margin-top: 0;
+}
+
+.diagram,
+.output {
+  background: #101827;
+  color: #d8e2ff;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.button {
+  padding: 10px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-right: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.button.primary {
+  border: none;
+  background: #2563eb;
+  color: white;
+}
+
+.button.primary:hover {
+  background: #1d4ed8;
+}
+
+.button.secondary {
+  border: 1px solid #b8c2d8;
+  background: white;
+  color: #172033;
+}
+
+.button.secondary:hover {
+  background: #f1f5f9;
+}
+
+.badge {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #e8f0ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.healthy {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.unhealthy {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+@media (max-width: 600px) {
+  .page {
+    padding: 14px;
+  }
+
+  .header h1 {
+    font-size: 24px;
+  }
+}

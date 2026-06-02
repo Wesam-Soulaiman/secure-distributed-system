@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
+import "./App.css";
 
 const API_BASE_URL = "http://localhost:8080";
 
@@ -8,24 +9,31 @@ function App() {
   const [lbStatus, setLbStatus] = useState(null);
   const [pingResult, setPingResult] = useState(null);
   const [loading, setLoading] = useState(false);
+
   const [wafStatus, setWafStatus] = useState(null);
   const [wafTestResult, setWafTestResult] = useState(null);
+
+  const [rateLimitStatus, setRateLimitStatus] = useState(null);
+  const [rateLimitTestResult, setRateLimitTestResult] = useState(null);
 
   async function fetchStatus() {
     setLoading(true);
 
     try {
-      const [clusterResponse, lbResponse, wafResponse] = await Promise.all([
-        axios.get(`${API_BASE_URL}/cluster/status`),
-        axios.get(`${API_BASE_URL}/lb/status`),
-        axios.get(`${API_BASE_URL}/gateway/waf/status`),
-      ]);
+      const [clusterResponse, lbResponse, wafResponse, rateLimitResponse] =
+        await Promise.all([
+          axios.get(`${API_BASE_URL}/cluster/status`),
+          axios.get(`${API_BASE_URL}/lb/status`),
+          axios.get(`${API_BASE_URL}/gateway/waf/status`),
+          axios.get(`${API_BASE_URL}/gateway/rate-limit/status`),
+        ]);
 
       setClusterStatus(clusterResponse.data);
       setLbStatus(lbResponse.data);
       setWafStatus(wafResponse.data);
+      setRateLimitStatus(rateLimitResponse.data);
     } catch (error) {
-      console.error(error);
+      console.error("Failed to fetch system status:", error);
     } finally {
       setLoading(false);
     }
@@ -39,13 +47,17 @@ function App() {
     } catch (error) {
       setPingResult({
         error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
       });
     }
   }
 
   async function testWafAttack() {
     try {
-      await axios.get(`${API_BASE_URL}/api/get/user?id=1' OR '1'='1`);
+      await axios.get(
+        `${API_BASE_URL}/api/get/user?id=1%27%20OR%20%271%27=%271`,
+      );
 
       setWafTestResult({
         blocked: false,
@@ -60,6 +72,47 @@ function App() {
     }
   }
 
+  async function testRateLimit() {
+    const totalRequests = 40;
+    let successCount = 0;
+    let blockedCount = 0;
+    let failedCount = 0;
+    const statusCodes = [];
+
+    const requests = Array.from({ length: totalRequests }, async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/ping`);
+        statusCodes.push(response.status);
+        successCount += 1;
+      } catch (error) {
+        const status = error.response?.status || 0;
+        statusCodes.push(status);
+
+        if (status === 429 || status === 503) {
+          blockedCount += 1;
+        } else {
+          failedCount += 1;
+        }
+      }
+    });
+
+    await Promise.all(requests);
+
+    setRateLimitTestResult({
+      totalRequests,
+      successCount,
+      blockedCount,
+      failedCount,
+      statusCodes,
+      note:
+        blockedCount > 0
+          ? "Rate limiting is working. Some requests were blocked by Nginx."
+          : "No requests were blocked. Try clicking again quickly or reduce the rate limit.",
+    });
+
+    await fetchStatus();
+  }
+
   useEffect(() => {
     fetchStatus();
 
@@ -69,22 +122,26 @@ function App() {
   }, []);
 
   return (
-    <main style={styles.page}>
-      <section style={styles.header}>
+    <main className="page">
+      <section className="header">
         <h1>Secure Distributed System Dashboard</h1>
         <p>
-          Nginx Gateway + Custom Load Balancer + Express Raft Nodes + React UI
+          Nginx Gateway + WAF + Rate Limiting + Custom Load Balancer + Express
+          Raft Nodes + React UI
         </p>
       </section>
 
-      <section style={styles.grid}>
-        <div style={styles.card}>
+      <section className="grid">
+        <div className="card">
           <h2>Architecture</h2>
-          <pre style={styles.diagram}>
+          <pre className="diagram">
             {`Browser / Client
       |
       v
 Nginx Gateway
+      |
+      +--> WAF Rules
+      +--> Rate Limiting
       |
       v
 Custom Load Balancer
@@ -95,7 +152,7 @@ Custom Load Balancer
           </pre>
         </div>
 
-        <div style={styles.card}>
+        <div className="card">
           <h2>Gateway</h2>
           <p>
             <strong>Status:</strong> Running through Nginx on port 8080
@@ -105,7 +162,7 @@ Custom Load Balancer
           </p>
         </div>
 
-        <div style={styles.card}>
+        <div className="card">
           <h2>WAF Gateway</h2>
           <p>
             <strong>Status:</strong> {wafStatus?.waf || "loading..."}
@@ -115,21 +172,51 @@ Custom Load Balancer
             {wafStatus?.rules?.join(", ") || "loading..."}
           </p>
 
-          <button style={styles.button} onClick={testWafAttack}>
+          <button className="button primary" onClick={testWafAttack}>
             Test SQL Injection Attack
           </button>
 
           {wafTestResult && (
             <>
               <h3>WAF Test Result</h3>
-              <pre style={styles.output}>
+              <pre className="output">
                 {JSON.stringify(wafTestResult, null, 2)}
               </pre>
             </>
           )}
         </div>
 
-        <div style={styles.card}>
+        <div className="card">
+          <h2>Rate Limiting</h2>
+          <p>
+            <strong>Status:</strong>{" "}
+            {rateLimitStatus?.rateLimit || "loading..."}
+          </p>
+          <p>
+            <strong>Limit:</strong> {rateLimitStatus?.limit || "loading..."}
+          </p>
+          <p>
+            <strong>Burst:</strong> {rateLimitStatus?.burst ?? "loading..."}
+          </p>
+          <p>
+            <strong>Scope:</strong> {rateLimitStatus?.scope || "loading..."}
+          </p>
+
+          <button className="button primary" onClick={testRateLimit}>
+            Run Rate Limit Test
+          </button>
+
+          {rateLimitTestResult && (
+            <>
+              <h3>Rate Limit Test Result</h3>
+              <pre className="output">
+                {JSON.stringify(rateLimitTestResult, null, 2)}
+              </pre>
+            </>
+          )}
+        </div>
+
+        <div className="card">
           <h2>Load Balancer</h2>
           <p>
             <strong>Algorithm:</strong> {lbStatus?.algorithm || "loading..."}
@@ -140,7 +227,7 @@ Custom Load Balancer
           </p>
         </div>
 
-        <div style={styles.card}>
+        <div className="card">
           <h2>Raft Leader</h2>
           <p>
             <strong>Current Leader:</strong>{" "}
@@ -149,25 +236,32 @@ Custom Load Balancer
         </div>
       </section>
 
-      <section style={styles.card}>
-        <h2>Nodes</h2>
+      <section className="card">
+        <div className="section-title">
+          <h2>Nodes</h2>
+          {loading && <span className="badge">Refreshing...</span>}
+        </div>
 
-        {loading && <p>Refreshing cluster status...</p>}
-
-        <div style={styles.nodeGrid}>
+        <div className="node-grid">
           {clusterStatus?.raft?.nodes?.map((node) => (
-            <div key={node.id} style={styles.nodeCard}>
+            <div key={node.id} className="node-card">
               <h3>{node.id}</h3>
+
               <p>
                 <strong>Health:</strong>{" "}
-                {node.healthy ? "Healthy" : "Unhealthy"}
+                <span className={node.healthy ? "healthy" : "unhealthy"}>
+                  {node.healthy ? "Healthy" : "Unhealthy"}
+                </span>
               </p>
+
               <p>
                 <strong>Role:</strong> {node.raft?.role || "offline"}
               </p>
+
               <p>
                 <strong>Term:</strong> {node.raft?.currentTerm ?? "-"}
               </p>
+
               <p>
                 <strong>Commit Index:</strong> {node.raft?.commitIndex ?? "-"}
               </p>
@@ -176,99 +270,26 @@ Custom Load Balancer
         </div>
       </section>
 
-      <section style={styles.card}>
+      <section className="card">
         <h2>Demo Controls</h2>
 
-        <button style={styles.button} onClick={sendPing}>
+        <button className="button primary" onClick={sendPing}>
           Send Ping Request
         </button>
 
-        <button style={styles.buttonSecondary} onClick={fetchStatus}>
+        <button className="button secondary" onClick={fetchStatus}>
           Refresh Status
         </button>
 
         {pingResult && (
           <>
             <h3>Last Ping Result</h3>
-            <pre style={styles.output}>
-              {JSON.stringify(pingResult, null, 2)}
-            </pre>
+            <pre className="output">{JSON.stringify(pingResult, null, 2)}</pre>
           </>
         )}
       </section>
     </main>
   );
 }
-
-const styles = {
-  page: {
-    fontFamily: "Arial, sans-serif",
-    padding: "24px",
-    background: "#f5f7fb",
-    minHeight: "100vh",
-    color: "#172033",
-  },
-  header: {
-    marginBottom: "24px",
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-    gap: "16px",
-    marginBottom: "16px",
-  },
-  card: {
-    background: "white",
-    borderRadius: "12px",
-    padding: "18px",
-    boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-    marginBottom: "16px",
-  },
-  nodeGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: "16px",
-  },
-  nodeCard: {
-    border: "1px solid #d9e0ef",
-    borderRadius: "10px",
-    padding: "14px",
-    background: "#fbfcff",
-  },
-  diagram: {
-    background: "#101827",
-    color: "#d8e2ff",
-    padding: "12px",
-    borderRadius: "8px",
-    overflowX: "auto",
-  },
-  output: {
-    background: "#101827",
-    color: "#d8e2ff",
-    padding: "12px",
-    borderRadius: "8px",
-    overflowX: "auto",
-    whiteSpace: "pre-wrap",
-  },
-  button: {
-    padding: "10px 14px",
-    borderRadius: "8px",
-    border: "none",
-    background: "#2563eb",
-    color: "white",
-    cursor: "pointer",
-    marginRight: "8px",
-    marginBottom: "8px",
-  },
-  buttonSecondary: {
-    padding: "10px 14px",
-    borderRadius: "8px",
-    border: "1px solid #b8c2d8",
-    background: "white",
-    color: "#172033",
-    cursor: "pointer",
-    marginBottom: "8px",
-  },
-};
 
 export default App;
