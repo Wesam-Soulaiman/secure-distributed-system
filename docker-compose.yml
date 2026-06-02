@@ -1,0 +1,80 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx-gateway
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - load-balancer
+      - dashboard
+    networks:
+      - distributed-net
+
+  load-balancer:
+    build:
+      context: ./load-balancer
+    container_name: custom-load-balancer
+    ports:
+      - "7000:7000"
+    environment:
+      - PORT=7000
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
+    networks:
+      - distributed-net
+
+  node-a:
+    build:
+      context: ./raft-node
+    container_name: node-a
+    ports:
+      - "8001:8000"
+    environment:
+      - PORT=8000
+      - NODE_ID=node-a
+      - INITIAL_ROLE=leader
+    networks:
+      - distributed-net
+
+  node-b:
+    build:
+      context: ./raft-node
+    container_name: node-b
+    ports:
+      - "8002:8000"
+    environment:
+      - PORT=8000
+      - NODE_ID=node-b
+      - INITIAL_ROLE=follower
+    networks:
+      - distributed-net
+
+  node-c:
+    build:
+      context: ./raft-node
+    container_name: node-c
+    ports:
+      - "8003:8000"
+    environment:
+      - PORT=8000
+      - NODE_ID=node-c
+      - INITIAL_ROLE=follower
+    networks:
+      - distributed-net
+
+  dashboard:
+    build:
+      context: ./dashboard
+    container_name: react-dashboard
+    ports:
+      - "3000:3000"
+    networks:
+      - distributed-net
+
+networks:
+  distributed-net:
+    driver: bridge

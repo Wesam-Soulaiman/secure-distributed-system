@@ -1,0 +1,17 @@
+{
+  "name": "raft-node",
+  "version": "1.0.0",
+  "description": "Express backend node with simplified Raft state",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "morgan": "^1.10.0"
+  }
+}
