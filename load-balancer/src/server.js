@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 7000;
 const HEALTH_CHECK_TIMEOUT_MS = 2500;
 const HEALTH_CHECK_INTERVAL_MS = 3000;
 const FAILURE_THRESHOLD = 3;
+const VIRTUAL_NODES_PER_WEIGHT = 20;
 
 app.use(cors());
 app.use(express.json());
@@ -89,6 +90,63 @@ function pickNodeWeightedRoundRobin() {
   return selectedNode;
 }
 
+function hashString(input) {
+  let hash = 0;
+
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+
+  return hash;
+}
+
+function buildHashRing() {
+  const ring = [];
+
+  getHealthyNodes().forEach((node) => {
+    const virtualNodeCount = node.weight * VIRTUAL_NODES_PER_WEIGHT;
+
+    for (let i = 0; i < virtualNodeCount; i += 1) {
+      ring.push({
+        hash: hashString(`${node.id}-vn-${i}`),
+        node,
+        virtualNodeId: `${node.id}-vn-${i}`,
+      });
+    }
+  });
+
+  ring.sort((a, b) => a.hash - b.hash);
+
+  return ring;
+}
+
+function pickNodeByConsistentHash(key) {
+  const ring = buildHashRing();
+
+  if (ring.length === 0) {
+    return {
+      selectedNode: null,
+      hash: null,
+      ringSize: 0,
+      virtualNodeId: null,
+      virtualNodeHash: null,
+    };
+  }
+
+  const keyHash = hashString(key);
+
+  const matchedVirtualNode =
+    ring.find((item) => item.hash >= keyHash) || ring[0];
+
+  return {
+    selectedNode: matchedVirtualNode.node,
+    hash: keyHash,
+    ringSize: ring.length,
+    virtualNodeId: matchedVirtualNode.virtualNodeId,
+    virtualNodeHash: matchedVirtualNode.hash,
+  };
+}
+
 function markNodeSuccess(node) {
   node.successCount += 1;
   node.failureCount = 0;
@@ -165,6 +223,7 @@ async function proxyGetToSelectedNode(path) {
     lastRoutedRequest = {
       method: "GET",
       path,
+      routingStrategy: "weighted-round-robin",
       selectedNode: selectedNode.id,
       timestamp: new Date().toISOString(),
     };
@@ -175,6 +234,64 @@ async function proxyGetToSelectedNode(path) {
         routedBy: "custom-load-balancer",
         algorithm: "weighted-round-robin",
         selectedNode: selectedNode.id,
+        response: response.data,
+      },
+    };
+  } catch (error) {
+    markNodeFailure(selectedNode, error);
+
+    return {
+      statusCode: 502,
+      data: {
+        error: "Failed to reach selected node",
+        selectedNode: selectedNode.id,
+      },
+    };
+  }
+}
+
+async function proxyGetByConsistentHash(key) {
+  const hashResult = pickNodeByConsistentHash(key);
+  const selectedNode = hashResult.selectedNode;
+
+  if (!selectedNode) {
+    return {
+      statusCode: 503,
+      data: {
+        error: "No healthy nodes available",
+      },
+    };
+  }
+
+  try {
+    const response = await axios.get(`${selectedNode.url}/api/get/${key}`, {
+      timeout: HEALTH_CHECK_TIMEOUT_MS,
+    });
+
+    selectedNode.requestCount += 1;
+    markNodeSuccess(selectedNode);
+
+    lastRoutedRequest = {
+      method: "GET",
+      path: `/api/get/${key}`,
+      routingStrategy: "consistent-hashing",
+      key,
+      keyHash: hashResult.hash,
+      selectedNode: selectedNode.id,
+      virtualNodeId: hashResult.virtualNodeId,
+      timestamp: new Date().toISOString(),
+    };
+
+    return {
+      statusCode: response.status,
+      data: {
+        routedBy: "custom-load-balancer",
+        algorithm: "consistent-hashing",
+        key,
+        keyHash: hashResult.hash,
+        selectedNode: selectedNode.id,
+        virtualNodeId: hashResult.virtualNodeId,
+        ringSize: hashResult.ringSize,
         response: response.data,
       },
     };
@@ -214,6 +331,7 @@ async function proxyPostToSelectedNode(path, body) {
     lastRoutedRequest = {
       method: "POST",
       path,
+      routingStrategy: "weighted-round-robin",
       selectedNode: selectedNode.id,
       timestamp: new Date().toISOString(),
     };
@@ -249,12 +367,17 @@ refreshHealthChecks().catch((error) => {
 app.get("/lb/status", (req, res) => {
   rebuildWeightedSequence();
 
+  const hashRingSize = buildHashRing().length;
+
   res.json({
     service: "custom-load-balancer",
     algorithm: "weighted-round-robin",
+    keyBasedRouting: "consistent-hashing",
     healthCheckIntervalMs: HEALTH_CHECK_INTERVAL_MS,
     healthCheckTimeoutMs: HEALTH_CHECK_TIMEOUT_MS,
     failureThreshold: FAILURE_THRESHOLD,
+    virtualNodesPerWeight: VIRTUAL_NODES_PER_WEIGHT,
+    hashRingSize,
     healthyNodes: getHealthyNodes().map((node) => node.id),
     unhealthyNodes: nodes
       .filter((node) => !node.healthy)
@@ -262,6 +385,30 @@ app.get("/lb/status", (req, res) => {
     lastRoutedRequest,
     nodes: nodes.map(formatNodeForStatus),
     weightedSequence: weightedSequence.map((node) => node.id),
+  });
+});
+
+app.get("/lb/hash/:key", (req, res) => {
+  rebuildWeightedSequence();
+
+  const { key } = req.params;
+  const hashResult = pickNodeByConsistentHash(key);
+
+  if (!hashResult.selectedNode) {
+    return res.status(503).json({
+      error: "No healthy nodes available",
+    });
+  }
+
+  res.json({
+    algorithm: "consistent-hashing",
+    key,
+    keyHash: hashResult.hash,
+    selectedNode: hashResult.selectedNode.id,
+    virtualNodeId: hashResult.virtualNodeId,
+    virtualNodeHash: hashResult.virtualNodeHash,
+    ringSize: hashResult.ringSize,
+    healthyNodes: getHealthyNodes().map((node) => node.id),
   });
 });
 
@@ -345,6 +492,7 @@ app.get("/cluster/status", async (req, res) => {
     loadBalancer: {
       service: "custom-load-balancer",
       algorithm: "weighted-round-robin",
+      keyBasedRouting: "consistent-hashing",
       healthyNodes: getHealthyNodes().map((node) => node.id),
       unhealthyNodes: nodes
         .filter((node) => !node.healthy)
@@ -365,7 +513,7 @@ app.get("/api/ping", async (req, res) => {
 });
 
 app.get("/api/get/:key", async (req, res) => {
-  const result = await proxyGetToSelectedNode(`/api/get/${req.params.key}`);
+  const result = await proxyGetByConsistentHash(req.params.key);
   res.status(result.statusCode).json(result.data);
 });
 

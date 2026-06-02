@@ -16,6 +16,9 @@ function App() {
   const [rateLimitStatus, setRateLimitStatus] = useState(null);
   const [rateLimitTestResult, setRateLimitTestResult] = useState(null);
 
+  const [hashKey, setHashKey] = useState("course");
+  const [hashResult, setHashResult] = useState(null);
+
   async function fetchStatus() {
     setLoading(true);
 
@@ -55,26 +58,27 @@ function App() {
 
   async function sendMultiplePingRequests() {
     const totalRequests = 12;
-    const results = [];
 
-    for (let i = 0; i < totalRequests; i += 1) {
+    const requests = Array.from({ length: totalRequests }, async (_, index) => {
       try {
         const response = await axios.get(`${API_BASE_URL}/api/ping`);
 
-        results.push({
-          request: i + 1,
+        return {
+          request: index + 1,
           status: response.status,
           selectedNode: response.data.selectedNode,
-        });
+        };
       } catch (error) {
-        results.push({
-          request: i + 1,
+        return {
+          request: index + 1,
           status: error.response?.status || 0,
           selectedNode: null,
           error: error.message,
-        });
+        };
       }
-    }
+    });
+
+    const results = await Promise.all(requests);
 
     setPingResult({
       test: "weighted-round-robin",
@@ -114,6 +118,21 @@ function App() {
       await fetchStatus();
     } catch (error) {
       setPingResult({
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    }
+  }
+
+  async function testConsistentHashing() {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/lb/hash/${hashKey}`);
+
+      setHashResult(response.data);
+      await fetchStatus();
+    } catch (error) {
+      setHashResult({
         error: error.message,
         status: error.response?.status,
         message: error.response?.data,
@@ -292,6 +311,11 @@ Custom Load Balancer
           </p>
 
           <p>
+            <strong>Key-based Routing:</strong>{" "}
+            {lbStatus?.keyBasedRouting || "loading..."}
+          </p>
+
+          <p>
             <strong>Healthy Nodes:</strong>{" "}
             {lbStatus?.healthyNodes?.join(", ") || "loading..."}
           </p>
@@ -364,6 +388,47 @@ Custom Load Balancer
                 {JSON.stringify(lbStatus.lastRoutedRequest, null, 2)}
               </pre>
             </div>
+          )}
+        </div>
+
+        <div className="card">
+          <h2>Consistent Hashing</h2>
+
+          <p>
+            <strong>Strategy:</strong>{" "}
+            {lbStatus?.keyBasedRouting || "loading..."}
+          </p>
+
+          <p>
+            <strong>Virtual Nodes per Weight:</strong>{" "}
+            {lbStatus?.virtualNodesPerWeight ?? "loading..."}
+          </p>
+
+          <p>
+            <strong>Hash Ring Size:</strong>{" "}
+            {lbStatus?.hashRingSize ?? "loading..."}
+          </p>
+
+          <div className="input-row">
+            <input
+              className="text-input"
+              value={hashKey}
+              onChange={(event) => setHashKey(event.target.value)}
+              placeholder="Enter key, e.g. course"
+            />
+
+            <button className="button primary" onClick={testConsistentHashing}>
+              Find Responsible Node
+            </button>
+          </div>
+
+          {hashResult && (
+            <>
+              <h3>Hash Result</h3>
+              <pre className="output">
+                {JSON.stringify(hashResult, null, 2)}
+              </pre>
+            </>
           )}
         </div>
 
