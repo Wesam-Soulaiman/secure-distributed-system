@@ -358,6 +358,56 @@ async function proxyPostToSelectedNode(path, body) {
   }
 }
 
+async function proxyDeleteToSelectedNode(path) {
+  const selectedNode = pickNodeWeightedRoundRobin();
+
+  if (!selectedNode) {
+    return {
+      statusCode: 503,
+      data: {
+        error: "No healthy nodes available",
+      },
+    };
+  }
+
+  try {
+    const response = await axios.delete(`${selectedNode.url}${path}`, {
+      timeout: HEALTH_CHECK_TIMEOUT_MS,
+    });
+
+    selectedNode.requestCount += 1;
+    markNodeSuccess(selectedNode);
+
+    lastRoutedRequest = {
+      method: "DELETE",
+      path,
+      routingStrategy: "weighted-round-robin",
+      selectedNode: selectedNode.id,
+      timestamp: new Date().toISOString(),
+    };
+
+    return {
+      statusCode: response.status,
+      data: {
+        routedBy: "custom-load-balancer",
+        algorithm: "weighted-round-robin",
+        selectedNode: selectedNode.id,
+        response: response.data,
+      },
+    };
+  } catch (error) {
+    markNodeFailure(selectedNode, error);
+
+    return {
+      statusCode: 502,
+      data: {
+        error: "Failed to reach selected node",
+        selectedNode: selectedNode.id,
+      },
+    };
+  }
+}
+
 setInterval(refreshHealthChecks, HEALTH_CHECK_INTERVAL_MS);
 
 refreshHealthChecks().catch((error) => {
@@ -519,6 +569,14 @@ app.get("/api/get/:key", async (req, res) => {
 
 app.post("/api/set", async (req, res) => {
   const result = await proxyPostToSelectedNode("/api/set", req.body);
+  res.status(result.statusCode).json(result.data);
+});
+
+app.delete("/api/delete/:key", async (req, res) => {
+  const result = await proxyDeleteToSelectedNode(
+    `/api/delete/${req.params.key}`,
+  );
+
   res.status(result.statusCode).json(result.data);
 });
 

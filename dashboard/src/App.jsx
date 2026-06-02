@@ -19,6 +19,10 @@ function App() {
   const [hashKey, setHashKey] = useState("course");
   const [hashResult, setHashResult] = useState(null);
 
+  const [kvKey, setKvKey] = useState("course");
+  const [kvValue, setKvValue] = useState("Distributed Systems");
+  const [kvResult, setKvResult] = useState(null);
+
   async function fetchStatus() {
     setLoading(true);
 
@@ -133,6 +137,71 @@ function App() {
       await fetchStatus();
     } catch (error) {
       setHashResult({
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    }
+  }
+
+  async function setKeyValue() {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/set`, {
+        key: kvKey,
+        value: kvValue,
+      });
+
+      setKvResult({
+        operation: "SET",
+        result: response.data,
+      });
+
+      await fetchStatus();
+    } catch (error) {
+      setKvResult({
+        operation: "SET",
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    }
+  }
+
+  async function getKeyValue() {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/get/${kvKey}`);
+
+      setKvResult({
+        operation: "GET",
+        result: response.data,
+      });
+
+      await fetchStatus();
+    } catch (error) {
+      setKvResult({
+        operation: "GET",
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    }
+  }
+
+  async function deleteKeyValue() {
+    try {
+      const response = await axios.delete(
+        `${API_BASE_URL}/api/delete/${kvKey}`,
+      );
+
+      setKvResult({
+        operation: "DELETE",
+        result: response.data,
+      });
+
+      await fetchStatus();
+    } catch (error) {
+      setKvResult({
+        operation: "DELETE",
         error: error.message,
         status: error.response?.status,
         message: error.response?.data,
@@ -428,6 +497,56 @@ Custom Load Balancer
               <pre className="output">
                 {JSON.stringify(hashResult, null, 2)}
               </pre>
+            </>
+          )}
+        </div>
+
+        <div className="card">
+          <h2>Key-Value Store</h2>
+
+          <p>
+            <strong>SET routing:</strong> Weighted Round Robin now, Raft Leader
+            later
+          </p>
+
+          <p>
+            <strong>GET routing:</strong> Consistent Hashing by key
+          </p>
+
+          <div className="input-row">
+            <input
+              className="text-input"
+              value={kvKey}
+              onChange={(event) => setKvKey(event.target.value)}
+              placeholder="Key, e.g. course"
+            />
+
+            <input
+              className="text-input"
+              value={kvValue}
+              onChange={(event) => setKvValue(event.target.value)}
+              placeholder="Value, e.g. Distributed Systems"
+            />
+          </div>
+
+          <div className="input-row">
+            <button className="button primary" onClick={setKeyValue}>
+              SET
+            </button>
+
+            <button className="button primary" onClick={getKeyValue}>
+              GET
+            </button>
+
+            <button className="button secondary" onClick={deleteKeyValue}>
+              DELETE
+            </button>
+          </div>
+
+          {kvResult && (
+            <>
+              <h3>Key-Value Result</h3>
+              <pre className="output">{JSON.stringify(kvResult, null, 2)}</pre>
             </>
           )}
         </div>
