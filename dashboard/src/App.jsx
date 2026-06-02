@@ -79,10 +79,14 @@ function App() {
     setPingResult({
       test: "weighted-round-robin",
       totalRequests,
-      expectedDistribution: {
+      expectedDistributionWhenAllNodesHealthy: {
         "node-a": 6,
         "node-b": 4,
         "node-c": 2,
+      },
+      expectedDistributionIfNodeBIsDown: {
+        "node-a": 9,
+        "node-c": 3,
       },
       results,
     });
@@ -94,6 +98,19 @@ function App() {
     try {
       await axios.post(`${API_BASE_URL}/lb/reset-stats`);
       setPingResult(null);
+      await fetchStatus();
+    } catch (error) {
+      setPingResult({
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    }
+  }
+
+  async function refreshHealthChecks() {
+    try {
+      await axios.post(`${API_BASE_URL}/lb/refresh-health`);
       await fetchStatus();
     } catch (error) {
       setPingResult({
@@ -269,13 +286,23 @@ Custom Load Balancer
 
         <div className="card">
           <h2>Load Balancer</h2>
+
           <p>
             <strong>Algorithm:</strong> {lbStatus?.algorithm || "loading..."}
           </p>
+
           <p>
             <strong>Healthy Nodes:</strong>{" "}
             {lbStatus?.healthyNodes?.join(", ") || "loading..."}
           </p>
+
+          <p>
+            <strong>Unhealthy Nodes:</strong>{" "}
+            {lbStatus?.unhealthyNodes?.length
+              ? lbStatus.unhealthyNodes.join(", ")
+              : "none"}
+          </p>
+
           <p>
             <strong>Weighted Sequence:</strong>{" "}
             {lbStatus?.weightedSequence?.join(" → ") || "loading..."}
@@ -288,20 +315,42 @@ Custom Load Balancer
                   <th>Node</th>
                   <th>Weight</th>
                   <th>Health</th>
+                  <th>Included</th>
                   <th>Requests</th>
+                  <th>Last Check</th>
                 </tr>
               </thead>
+
               <tbody>
                 {lbStatus?.nodes?.map((node) => (
                   <tr key={node.id}>
                     <td>{node.id}</td>
+
                     <td>{node.weight}</td>
+
                     <td>
                       <span className={node.healthy ? "healthy" : "unhealthy"}>
                         {node.healthy ? "Healthy" : "Unhealthy"}
                       </span>
                     </td>
+
+                    <td>
+                      <span
+                        className={
+                          node.includedInRouting ? "healthy" : "unhealthy"
+                        }
+                      >
+                        {node.includedInRouting ? "Yes" : "No"}
+                      </span>
+                    </td>
+
                     <td>{node.requestCount}</td>
+
+                    <td>
+                      {node.lastHealthCheck
+                        ? new Date(node.lastHealthCheck).toLocaleTimeString()
+                        : "-"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -346,6 +395,15 @@ Custom Load Balancer
               </p>
 
               <p>
+                <strong>Included in Routing:</strong>{" "}
+                <span
+                  className={node.includedInRouting ? "healthy" : "unhealthy"}
+                >
+                  {node.includedInRouting ? "Yes" : "No"}
+                </span>
+              </p>
+
+              <p>
                 <strong>Role:</strong> {node.raft?.role || "offline"}
               </p>
 
@@ -374,6 +432,10 @@ Custom Load Balancer
 
         <button className="button secondary" onClick={resetLoadBalancerStats}>
           Reset LB Stats
+        </button>
+
+        <button className="button secondary" onClick={refreshHealthChecks}>
+          Refresh Health Checks
         </button>
 
         <button className="button secondary" onClick={fetchStatus}>

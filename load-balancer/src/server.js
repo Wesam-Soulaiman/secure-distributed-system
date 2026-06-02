@@ -7,6 +7,10 @@ const app = express();
 
 const PORT = process.env.PORT || 7000;
 
+const HEALTH_CHECK_TIMEOUT_MS = 2500;
+const HEALTH_CHECK_INTERVAL_MS = 3000;
+const FAILURE_THRESHOLD = 3;
+
 app.use(cors());
 app.use(express.json());
 app.use(morgan("dev"));
@@ -18,6 +22,10 @@ const nodes = [
     weight: 3,
     healthy: true,
     requestCount: 0,
+    lastHealthCheck: null,
+    lastHealthError: null,
+    failureCount: 0,
+    successCount: 0,
   },
   {
     id: "node-b",
@@ -25,6 +33,10 @@ const nodes = [
     weight: 2,
     healthy: true,
     requestCount: 0,
+    lastHealthCheck: null,
+    lastHealthError: null,
+    failureCount: 0,
+    successCount: 0,
   },
   {
     id: "node-c",
@@ -32,12 +44,20 @@ const nodes = [
     weight: 1,
     healthy: true,
     requestCount: 0,
+    lastHealthCheck: null,
+    lastHealthError: null,
+    failureCount: 0,
+    successCount: 0,
   },
 ];
 
 let weightedSequence = [];
 let weightedIndex = 0;
 let lastRoutedRequest = null;
+
+function getHealthyNodes() {
+  return nodes.filter((node) => node.healthy);
+}
 
 function rebuildWeightedSequence() {
   weightedSequence = [];
@@ -55,10 +75,6 @@ function rebuildWeightedSequence() {
   }
 }
 
-function getHealthyNodes() {
-  return nodes.filter((node) => node.healthy);
-}
-
 function pickNodeWeightedRoundRobin() {
   rebuildWeightedSequence();
 
@@ -73,22 +89,60 @@ function pickNodeWeightedRoundRobin() {
   return selectedNode;
 }
 
+function markNodeSuccess(node) {
+  node.successCount += 1;
+  node.failureCount = 0;
+  node.healthy = true;
+  node.lastHealthError = null;
+}
+
+function markNodeFailure(node, error) {
+  node.failureCount += 1;
+  node.lastHealthError = error.code || error.message;
+
+  if (node.failureCount >= FAILURE_THRESHOLD) {
+    node.healthy = false;
+  }
+
+  rebuildWeightedSequence();
+}
+
 async function refreshHealthChecks() {
   await Promise.all(
     nodes.map(async (node) => {
+      node.lastHealthCheck = new Date().toISOString();
+
       try {
-        await axios.get(`${node.url}/health`, { timeout: 1000 });
-        node.healthy = true;
+        await axios.get(`${node.url}/health`, {
+          timeout: HEALTH_CHECK_TIMEOUT_MS,
+        });
+
+        markNodeSuccess(node);
       } catch (error) {
-        node.healthy = false;
+        markNodeFailure(node, error);
       }
     }),
   );
+
+  rebuildWeightedSequence();
+}
+
+function formatNodeForStatus(node) {
+  return {
+    id: node.id,
+    url: node.url,
+    weight: node.weight,
+    healthy: node.healthy,
+    includedInRouting: node.healthy,
+    requestCount: node.requestCount,
+    lastHealthCheck: node.lastHealthCheck,
+    lastHealthError: node.lastHealthError,
+    failureCount: node.failureCount,
+    successCount: node.successCount,
+  };
 }
 
 async function proxyGetToSelectedNode(path) {
-  await refreshHealthChecks();
-
   const selectedNode = pickNodeWeightedRoundRobin();
 
   if (!selectedNode) {
@@ -101,9 +155,12 @@ async function proxyGetToSelectedNode(path) {
   }
 
   try {
-    const response = await axios.get(`${selectedNode.url}${path}`);
+    const response = await axios.get(`${selectedNode.url}${path}`, {
+      timeout: HEALTH_CHECK_TIMEOUT_MS,
+    });
 
     selectedNode.requestCount += 1;
+    markNodeSuccess(selectedNode);
 
     lastRoutedRequest = {
       method: "GET",
@@ -122,7 +179,7 @@ async function proxyGetToSelectedNode(path) {
       },
     };
   } catch (error) {
-    selectedNode.healthy = false;
+    markNodeFailure(selectedNode, error);
 
     return {
       statusCode: 502,
@@ -135,8 +192,6 @@ async function proxyGetToSelectedNode(path) {
 }
 
 async function proxyPostToSelectedNode(path, body) {
-  await refreshHealthChecks();
-
   const selectedNode = pickNodeWeightedRoundRobin();
 
   if (!selectedNode) {
@@ -149,9 +204,12 @@ async function proxyPostToSelectedNode(path, body) {
   }
 
   try {
-    const response = await axios.post(`${selectedNode.url}${path}`, body);
+    const response = await axios.post(`${selectedNode.url}${path}`, body, {
+      timeout: HEALTH_CHECK_TIMEOUT_MS,
+    });
 
     selectedNode.requestCount += 1;
+    markNodeSuccess(selectedNode);
 
     lastRoutedRequest = {
       method: "POST",
@@ -170,7 +228,7 @@ async function proxyPostToSelectedNode(path, body) {
       },
     };
   } catch (error) {
-    selectedNode.healthy = false;
+    markNodeFailure(selectedNode, error);
 
     return {
       statusCode: 502,
@@ -182,24 +240,41 @@ async function proxyPostToSelectedNode(path, body) {
   }
 }
 
-setInterval(refreshHealthChecks, 3000);
+setInterval(refreshHealthChecks, HEALTH_CHECK_INTERVAL_MS);
 
-app.get("/lb/status", async (req, res) => {
-  await refreshHealthChecks();
+refreshHealthChecks().catch((error) => {
+  console.error("Initial health check failed:", error.message);
+});
+
+app.get("/lb/status", (req, res) => {
   rebuildWeightedSequence();
 
   res.json({
     service: "custom-load-balancer",
     algorithm: "weighted-round-robin",
+    healthCheckIntervalMs: HEALTH_CHECK_INTERVAL_MS,
+    healthCheckTimeoutMs: HEALTH_CHECK_TIMEOUT_MS,
+    failureThreshold: FAILURE_THRESHOLD,
     healthyNodes: getHealthyNodes().map((node) => node.id),
+    unhealthyNodes: nodes
+      .filter((node) => !node.healthy)
+      .map((node) => node.id),
     lastRoutedRequest,
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      url: node.url,
-      weight: node.weight,
-      healthy: node.healthy,
-      requestCount: node.requestCount,
-    })),
+    nodes: nodes.map(formatNodeForStatus),
+    weightedSequence: weightedSequence.map((node) => node.id),
+  });
+});
+
+app.post("/lb/refresh-health", async (req, res) => {
+  await refreshHealthChecks();
+
+  res.json({
+    status: "refreshed",
+    healthyNodes: getHealthyNodes().map((node) => node.id),
+    unhealthyNodes: nodes
+      .filter((node) => !node.healthy)
+      .map((node) => node.id),
+    nodes: nodes.map(formatNodeForStatus),
     weightedSequence: weightedSequence.map((node) => node.id),
   });
 });
@@ -207,10 +282,15 @@ app.get("/lb/status", async (req, res) => {
 app.post("/lb/reset-stats", (req, res) => {
   nodes.forEach((node) => {
     node.requestCount = 0;
+    node.failureCount = 0;
+    node.successCount = 0;
+    node.lastHealthError = null;
+    node.healthy = true;
   });
 
   weightedIndex = 0;
   lastRoutedRequest = null;
+  rebuildWeightedSequence();
 
   res.json({
     status: "reset",
@@ -219,7 +299,7 @@ app.post("/lb/reset-stats", (req, res) => {
 });
 
 app.get("/cluster/status", async (req, res) => {
-  await refreshHealthChecks();
+  rebuildWeightedSequence();
 
   const raftStatuses = await Promise.all(
     nodes.map(async (node) => {
@@ -227,24 +307,29 @@ app.get("/cluster/status", async (req, res) => {
         return {
           id: node.id,
           healthy: false,
+          includedInRouting: false,
           raft: null,
         };
       }
 
       try {
         const response = await axios.get(`${node.url}/raft/status`, {
-          timeout: 1000,
+          timeout: HEALTH_CHECK_TIMEOUT_MS,
         });
 
         return {
           id: node.id,
           healthy: true,
+          includedInRouting: true,
           raft: response.data,
         };
       } catch (error) {
+        markNodeFailure(node, error);
+
         return {
           id: node.id,
           healthy: false,
+          includedInRouting: false,
           raft: null,
         };
       }
@@ -261,7 +346,11 @@ app.get("/cluster/status", async (req, res) => {
       service: "custom-load-balancer",
       algorithm: "weighted-round-robin",
       healthyNodes: getHealthyNodes().map((node) => node.id),
+      unhealthyNodes: nodes
+        .filter((node) => !node.healthy)
+        .map((node) => node.id),
       lastRoutedRequest,
+      weightedSequence: weightedSequence.map((node) => node.id),
     },
     raft: {
       currentLeader: leader ? leader.id : null,
