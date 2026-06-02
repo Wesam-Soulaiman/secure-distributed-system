@@ -8,18 +8,22 @@ function App() {
   const [lbStatus, setLbStatus] = useState(null);
   const [pingResult, setPingResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [wafStatus, setWafStatus] = useState(null);
+  const [wafTestResult, setWafTestResult] = useState(null);
 
   async function fetchStatus() {
     setLoading(true);
 
     try {
-      const [clusterResponse, lbResponse] = await Promise.all([
+      const [clusterResponse, lbResponse, wafResponse] = await Promise.all([
         axios.get(`${API_BASE_URL}/cluster/status`),
         axios.get(`${API_BASE_URL}/lb/status`),
+        axios.get(`${API_BASE_URL}/gateway/waf/status`),
       ]);
 
       setClusterStatus(clusterResponse.data);
       setLbStatus(lbResponse.data);
+      setWafStatus(wafResponse.data);
     } catch (error) {
       console.error(error);
     } finally {
@@ -35,6 +39,23 @@ function App() {
     } catch (error) {
       setPingResult({
         error: error.message,
+      });
+    }
+  }
+
+  async function testWafAttack() {
+    try {
+      await axios.get(`${API_BASE_URL}/api/get/user?id=1' OR '1'='1`);
+
+      setWafTestResult({
+        blocked: false,
+        message: "Attack passed unexpectedly",
+      });
+    } catch (error) {
+      setWafTestResult({
+        blocked: true,
+        status: error.response?.status,
+        message: error.response?.data || error.message,
       });
     }
   }
@@ -82,6 +103,30 @@ Custom Load Balancer
           <p>
             <strong>Role:</strong> Reverse Proxy / Gateway
           </p>
+        </div>
+
+        <div style={styles.card}>
+          <h2>WAF Gateway</h2>
+          <p>
+            <strong>Status:</strong> {wafStatus?.waf || "loading..."}
+          </p>
+          <p>
+            <strong>Rules:</strong>{" "}
+            {wafStatus?.rules?.join(", ") || "loading..."}
+          </p>
+
+          <button style={styles.button} onClick={testWafAttack}>
+            Test SQL Injection Attack
+          </button>
+
+          {wafTestResult && (
+            <>
+              <h3>WAF Test Result</h3>
+              <pre style={styles.output}>
+                {JSON.stringify(wafTestResult, null, 2)}
+              </pre>
+            </>
+          )}
         </div>
 
         <div style={styles.card}>
@@ -203,6 +248,7 @@ const styles = {
     padding: "12px",
     borderRadius: "8px",
     overflowX: "auto",
+    whiteSpace: "pre-wrap",
   },
   button: {
     padding: "10px 14px",
@@ -212,6 +258,7 @@ const styles = {
     color: "white",
     cursor: "pointer",
     marginRight: "8px",
+    marginBottom: "8px",
   },
   buttonSecondary: {
     padding: "10px 14px",
@@ -220,6 +267,7 @@ const styles = {
     background: "white",
     color: "#172033",
     cursor: "pointer",
+    marginBottom: "8px",
   },
 };
 
