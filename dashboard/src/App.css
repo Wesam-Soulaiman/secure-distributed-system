@@ -137,6 +137,53 @@ body {
   font-weight: 700;
 }
 
+.table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.data-table th,
+.data-table td {
+  border: 1px solid #d9e0ef;
+  padding: 10px;
+  text-align: left;
+}
+
+.data-table th {
+  background: #f1f5f9;
+  color: #172033;
+}
+
+.data-table tr:nth-child(even) {
+  background: #fbfcff;
+}
+
+.mini-box {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.mini-output {
+  background: #101827;
+  color: #d8e2ff;
+  padding: 10px;
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  margin-bottom: 0;
+  line-height: 1.5;
+}
+
 @media (max-width: 600px) {
   .page {
     padding: 14px;

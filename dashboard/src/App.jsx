@@ -53,6 +53,57 @@ function App() {
     }
   }
 
+  async function sendMultiplePingRequests() {
+    const totalRequests = 12;
+    const results = [];
+
+    for (let i = 0; i < totalRequests; i += 1) {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/ping`);
+
+        results.push({
+          request: i + 1,
+          status: response.status,
+          selectedNode: response.data.selectedNode,
+        });
+      } catch (error) {
+        results.push({
+          request: i + 1,
+          status: error.response?.status || 0,
+          selectedNode: null,
+          error: error.message,
+        });
+      }
+    }
+
+    setPingResult({
+      test: "weighted-round-robin",
+      totalRequests,
+      expectedDistribution: {
+        "node-a": 6,
+        "node-b": 4,
+        "node-c": 2,
+      },
+      results,
+    });
+
+    await fetchStatus();
+  }
+
+  async function resetLoadBalancerStats() {
+    try {
+      await axios.post(`${API_BASE_URL}/lb/reset-stats`);
+      setPingResult(null);
+      await fetchStatus();
+    } catch (error) {
+      setPingResult({
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    }
+  }
+
   async function testWafAttack() {
     try {
       await axios.get(
@@ -225,6 +276,46 @@ Custom Load Balancer
             <strong>Healthy Nodes:</strong>{" "}
             {lbStatus?.healthyNodes?.join(", ") || "loading..."}
           </p>
+          <p>
+            <strong>Weighted Sequence:</strong>{" "}
+            {lbStatus?.weightedSequence?.join(" → ") || "loading..."}
+          </p>
+
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Node</th>
+                  <th>Weight</th>
+                  <th>Health</th>
+                  <th>Requests</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lbStatus?.nodes?.map((node) => (
+                  <tr key={node.id}>
+                    <td>{node.id}</td>
+                    <td>{node.weight}</td>
+                    <td>
+                      <span className={node.healthy ? "healthy" : "unhealthy"}>
+                        {node.healthy ? "Healthy" : "Unhealthy"}
+                      </span>
+                    </td>
+                    <td>{node.requestCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {lbStatus?.lastRoutedRequest && (
+            <div className="mini-box">
+              <strong>Last Routed Request:</strong>
+              <pre className="mini-output">
+                {JSON.stringify(lbStatus.lastRoutedRequest, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
 
         <div className="card">
@@ -275,6 +366,14 @@ Custom Load Balancer
 
         <button className="button primary" onClick={sendPing}>
           Send Ping Request
+        </button>
+
+        <button className="button primary" onClick={sendMultiplePingRequests}>
+          Send 12 Requests
+        </button>
+
+        <button className="button secondary" onClick={resetLoadBalancerStats}>
+          Reset LB Stats
         </button>
 
         <button className="button secondary" onClick={fetchStatus}>
