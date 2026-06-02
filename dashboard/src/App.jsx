@@ -385,6 +385,11 @@ Custom Load Balancer
           </p>
 
           <p>
+            <strong>Write Routing:</strong>{" "}
+            {lbStatus?.writeRouting || "loading..."}
+          </p>
+
+          <p>
             <strong>Healthy Nodes:</strong>{" "}
             {lbStatus?.healthyNodes?.join(", ") || "loading..."}
           </p>
@@ -505,8 +510,7 @@ Custom Load Balancer
           <h2>Key-Value Store</h2>
 
           <p>
-            <strong>SET routing:</strong> Weighted Round Robin now, Raft Leader
-            later
+            <strong>SET / DELETE routing:</strong> Raft Leader
           </p>
 
           <p>

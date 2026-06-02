@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
 const axios = require("axios");
+const crypto = require("crypto");
 
 const app = express();
 
@@ -91,13 +92,8 @@ function pickNodeWeightedRoundRobin() {
 }
 
 function hashString(input) {
-  let hash = 0;
-
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-  }
-
-  return hash;
+  const hex = crypto.createHash("sha1").update(input).digest("hex").slice(0, 8);
+  return parseInt(hex, 16);
 }
 
 function buildHashRing() {
@@ -198,6 +194,138 @@ function formatNodeForStatus(node) {
     failureCount: node.failureCount,
     successCount: node.successCount,
   };
+}
+
+async function discoverLeaderNode() {
+  const healthyNodes = getHealthyNodes();
+
+  for (const node of healthyNodes) {
+    try {
+      const response = await axios.get(`${node.url}/raft/status`, {
+        timeout: HEALTH_CHECK_TIMEOUT_MS,
+      });
+
+      if (response.data.role === "leader") {
+        return {
+          leaderNode: node,
+          leaderStatus: response.data,
+        };
+      }
+    } catch (error) {
+      markNodeFailure(node, error);
+    }
+  }
+
+  return {
+    leaderNode: null,
+    leaderStatus: null,
+  };
+}
+
+async function proxyPostToLeader(path, body) {
+  const { leaderNode, leaderStatus } = await discoverLeaderNode();
+
+  if (!leaderNode) {
+    return {
+      statusCode: 503,
+      data: {
+        error: "No Raft leader available",
+      },
+    };
+  }
+
+  try {
+    const response = await axios.post(`${leaderNode.url}${path}`, body, {
+      timeout: HEALTH_CHECK_TIMEOUT_MS,
+    });
+
+    leaderNode.requestCount += 1;
+    markNodeSuccess(leaderNode);
+
+    lastRoutedRequest = {
+      method: "POST",
+      path,
+      routingStrategy: "leader-aware-routing",
+      selectedNode: leaderNode.id,
+      leaderTerm: leaderStatus.currentTerm,
+      timestamp: new Date().toISOString(),
+    };
+
+    return {
+      statusCode: response.status,
+      data: {
+        routedBy: "custom-load-balancer",
+        algorithm: "leader-aware-routing",
+        selectedNode: leaderNode.id,
+        leader: leaderNode.id,
+        leaderTerm: leaderStatus.currentTerm,
+        response: response.data,
+      },
+    };
+  } catch (error) {
+    markNodeFailure(leaderNode, error);
+
+    return {
+      statusCode: 502,
+      data: {
+        error: "Failed to reach Raft leader",
+        selectedNode: leaderNode.id,
+      },
+    };
+  }
+}
+
+async function proxyDeleteToLeader(path) {
+  const { leaderNode, leaderStatus } = await discoverLeaderNode();
+
+  if (!leaderNode) {
+    return {
+      statusCode: 503,
+      data: {
+        error: "No Raft leader available",
+      },
+    };
+  }
+
+  try {
+    const response = await axios.delete(`${leaderNode.url}${path}`, {
+      timeout: HEALTH_CHECK_TIMEOUT_MS,
+    });
+
+    leaderNode.requestCount += 1;
+    markNodeSuccess(leaderNode);
+
+    lastRoutedRequest = {
+      method: "DELETE",
+      path,
+      routingStrategy: "leader-aware-routing",
+      selectedNode: leaderNode.id,
+      leaderTerm: leaderStatus.currentTerm,
+      timestamp: new Date().toISOString(),
+    };
+
+    return {
+      statusCode: response.status,
+      data: {
+        routedBy: "custom-load-balancer",
+        algorithm: "leader-aware-routing",
+        selectedNode: leaderNode.id,
+        leader: leaderNode.id,
+        leaderTerm: leaderStatus.currentTerm,
+        response: response.data,
+      },
+    };
+  } catch (error) {
+    markNodeFailure(leaderNode, error);
+
+    return {
+      statusCode: 502,
+      data: {
+        error: "Failed to reach Raft leader",
+        selectedNode: leaderNode.id,
+      },
+    };
+  }
 }
 
 async function proxyGetToSelectedNode(path) {
@@ -423,6 +551,7 @@ app.get("/lb/status", (req, res) => {
     service: "custom-load-balancer",
     algorithm: "weighted-round-robin",
     keyBasedRouting: "consistent-hashing",
+    writeRouting: "raft-leader",
     healthCheckIntervalMs: HEALTH_CHECK_INTERVAL_MS,
     healthCheckTimeoutMs: HEALTH_CHECK_TIMEOUT_MS,
     failureThreshold: FAILURE_THRESHOLD,
@@ -543,6 +672,7 @@ app.get("/cluster/status", async (req, res) => {
       service: "custom-load-balancer",
       algorithm: "weighted-round-robin",
       keyBasedRouting: "consistent-hashing",
+      writeRouting: "raft-leader",
       healthyNodes: getHealthyNodes().map((node) => node.id),
       unhealthyNodes: nodes
         .filter((node) => !node.healthy)
@@ -568,15 +698,12 @@ app.get("/api/get/:key", async (req, res) => {
 });
 
 app.post("/api/set", async (req, res) => {
-  const result = await proxyPostToSelectedNode("/api/set", req.body);
+  const result = await proxyPostToLeader("/api/set", req.body);
   res.status(result.statusCode).json(result.data);
 });
 
 app.delete("/api/delete/:key", async (req, res) => {
-  const result = await proxyDeleteToSelectedNode(
-    `/api/delete/${req.params.key}`,
-  );
-
+  const result = await proxyDeleteToLeader(`/api/delete/${req.params.key}`);
   res.status(result.statusCode).json(result.data);
 });
 
