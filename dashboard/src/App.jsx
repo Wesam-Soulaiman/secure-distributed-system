@@ -23,6 +23,9 @@ function App() {
   const [kvValue, setKvValue] = useState("Distributed Systems");
   const [kvResult, setKvResult] = useState(null);
 
+  const [raftLogs, setRaftLogs] = useState(null);
+  const [raftLogsLoading, setRaftLogsLoading] = useState(false);
+
   async function fetchStatus() {
     setLoading(true);
 
@@ -126,6 +129,23 @@ function App() {
         status: error.response?.status,
         message: error.response?.data,
       });
+    }
+  }
+
+  async function fetchRaftLogs() {
+    setRaftLogsLoading(true);
+
+    try {
+      const response = await axios.get(`${API_BASE_URL}/raft/logs`);
+      setRaftLogs(response.data);
+    } catch (error) {
+      setRaftLogs({
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    } finally {
+      setRaftLogsLoading(false);
     }
   }
 
@@ -271,8 +291,12 @@ function App() {
 
   useEffect(() => {
     fetchStatus();
+    fetchRaftLogs();
 
-    const interval = setInterval(fetchStatus, 4000);
+    const interval = setInterval(() => {
+      fetchStatus();
+      fetchRaftLogs();
+    }, 4000);
 
     return () => clearInterval(interval);
   }, []);
@@ -602,6 +626,80 @@ Custom Load Balancer
               <p>
                 <strong>Commit Index:</strong> {node.raft?.commitIndex ?? "-"}
               </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="section-title">
+          <h2>Raft Logs & Replication</h2>
+          {raftLogsLoading && <span className="badge">Loading logs...</span>}
+        </div>
+
+        <p>
+          <strong>Leader:</strong> {raftLogs?.cluster?.leader || "unknown"}
+        </p>
+
+        <p>
+          <strong>Majority:</strong>{" "}
+          {raftLogs?.cluster
+            ? `${raftLogs.cluster.majority} / ${raftLogs.cluster.totalNodes}`
+            : "loading..."}
+        </p>
+
+        <button className="button secondary" onClick={fetchRaftLogs}>
+          Refresh Raft Logs
+        </button>
+
+        <div className="table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Node</th>
+                <th>Health</th>
+                <th>Role</th>
+                <th>Commit Index</th>
+                <th>Log Length</th>
+                <th>Store Keys</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {raftLogs?.logs?.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.id}</td>
+                  <td>
+                    <span className={item.healthy ? "healthy" : "unhealthy"}>
+                      {item.healthy ? "Healthy" : "Unhealthy"}
+                    </span>
+                  </td>
+                  <td>{item.data?.role || "-"}</td>
+                  <td>{item.data?.commitIndex ?? "-"}</td>
+                  <td>{item.data?.log?.length ?? "-"}</td>
+                  <td>
+                    {item.data?.store
+                      ? Object.keys(item.data.store).join(", ") || "empty"
+                      : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="raft-log-grid">
+          {raftLogs?.logs?.map((item) => (
+            <div key={item.id} className="mini-box">
+              <strong>{item.id} log</strong>
+
+              {item.data?.log?.length ? (
+                <pre className="mini-output">
+                  {JSON.stringify(item.data.log.slice(-5), null, 2)}
+                </pre>
+              ) : (
+                <p>{item.error || "No log entries"}</p>
+              )}
             </div>
           ))}
         </div>
