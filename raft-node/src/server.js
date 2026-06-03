@@ -304,6 +304,40 @@ app.delete("/api/delete/:key", async (req, res) => {
   res.status(result.statusCode).json(result.data);
 });
 
+app.post("/raft/become-leader", (req, res) => {
+  const { term } = req.body;
+
+  raftState.role = "leader";
+  raftState.currentTerm = term || raftState.currentTerm + 1;
+  raftState.leaderId = NODE_ID;
+  raftState.votedFor = NODE_ID;
+
+  res.json({
+    status: "became-leader",
+    nodeId: NODE_ID,
+    role: raftState.role,
+    currentTerm: raftState.currentTerm,
+    leaderId: raftState.leaderId,
+  });
+});
+
+app.post("/raft/become-follower", (req, res) => {
+  const { leaderId, term } = req.body;
+
+  raftState.role = "follower";
+  raftState.currentTerm = term || raftState.currentTerm;
+  raftState.leaderId = leaderId || raftState.leaderId;
+  raftState.votedFor = null;
+
+  res.json({
+    status: "became-follower",
+    nodeId: NODE_ID,
+    role: raftState.role,
+    currentTerm: raftState.currentTerm,
+    leaderId: raftState.leaderId,
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`${NODE_ID} is running on port ${PORT} as ${INITIAL_ROLE}`);
 });

@@ -26,6 +26,8 @@ function App() {
   const [raftLogs, setRaftLogs] = useState(null);
   const [raftLogsLoading, setRaftLogsLoading] = useState(false);
 
+  const [electionResult, setElectionResult] = useState(null);
+
   async function fetchStatus() {
     setLoading(true);
 
@@ -46,6 +48,23 @@ function App() {
       console.error("Failed to fetch system status:", error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchRaftLogs() {
+    setRaftLogsLoading(true);
+
+    try {
+      const response = await axios.get(`${API_BASE_URL}/raft/logs`);
+      setRaftLogs(response.data);
+    } catch (error) {
+      setRaftLogs({
+        error: error.message,
+        status: error.response?.status,
+        message: error.response?.data,
+      });
+    } finally {
+      setRaftLogsLoading(false);
     }
   }
 
@@ -132,20 +151,20 @@ function App() {
     }
   }
 
-  async function fetchRaftLogs() {
-    setRaftLogsLoading(true);
-
+  async function electLeader() {
     try {
-      const response = await axios.get(`${API_BASE_URL}/raft/logs`);
-      setRaftLogs(response.data);
+      const response = await axios.post(`${API_BASE_URL}/raft/elect-leader`);
+
+      setElectionResult(response.data);
+
+      await fetchStatus();
+      await fetchRaftLogs();
     } catch (error) {
-      setRaftLogs({
+      setElectionResult({
         error: error.message,
         status: error.response?.status,
         message: error.response?.data,
       });
-    } finally {
-      setRaftLogsLoading(false);
     }
   }
 
@@ -177,6 +196,7 @@ function App() {
       });
 
       await fetchStatus();
+      await fetchRaftLogs();
     } catch (error) {
       setKvResult({
         operation: "SET",
@@ -219,6 +239,7 @@ function App() {
       });
 
       await fetchStatus();
+      await fetchRaftLogs();
     } catch (error) {
       setKvResult({
         operation: "DELETE",
@@ -447,15 +468,12 @@ Custom Load Balancer
                 {lbStatus?.nodes?.map((node) => (
                   <tr key={node.id}>
                     <td>{node.id}</td>
-
                     <td>{node.weight}</td>
-
                     <td>
                       <span className={node.healthy ? "healthy" : "unhealthy"}>
                         {node.healthy ? "Healthy" : "Unhealthy"}
                       </span>
                     </td>
-
                     <td>
                       <span
                         className={
@@ -465,9 +483,7 @@ Custom Load Balancer
                         {node.includedInRouting ? "Yes" : "No"}
                       </span>
                     </td>
-
                     <td>{node.requestCount}</td>
-
                     <td>
                       {node.lastHealthCheck
                         ? new Date(node.lastHealthCheck).toLocaleTimeString()
@@ -581,10 +597,24 @@ Custom Load Balancer
 
         <div className="card">
           <h2>Raft Leader</h2>
+
           <p>
             <strong>Current Leader:</strong>{" "}
             {clusterStatus?.raft?.currentLeader || "unknown"}
           </p>
+
+          <button className="button primary" onClick={electLeader}>
+            Elect Leader
+          </button>
+
+          {electionResult && (
+            <>
+              <h3>Election Result</h3>
+              <pre className="output">
+                {JSON.stringify(electionResult, null, 2)}
+              </pre>
+            </>
+          )}
         </div>
       </section>
 

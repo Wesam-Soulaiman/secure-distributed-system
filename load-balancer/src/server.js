@@ -196,19 +196,25 @@ function formatNodeForStatus(node) {
   };
 }
 
-async function discoverLeaderNode() {
+async function getRaftStatus(node) {
+  const response = await axios.get(`${node.url}/raft/status`, {
+    timeout: HEALTH_CHECK_TIMEOUT_MS,
+  });
+
+  return response.data;
+}
+
+async function discoverCurrentLeader() {
   const healthyNodes = getHealthyNodes();
 
   for (const node of healthyNodes) {
     try {
-      const response = await axios.get(`${node.url}/raft/status`, {
-        timeout: HEALTH_CHECK_TIMEOUT_MS,
-      });
+      const status = await getRaftStatus(node);
 
-      if (response.data.role === "leader") {
+      if (status.role === "leader") {
         return {
           leaderNode: node,
-          leaderStatus: response.data,
+          leaderStatus: status,
         };
       }
     } catch (error) {
@@ -222,14 +228,117 @@ async function discoverLeaderNode() {
   };
 }
 
+async function electNewLeader() {
+  const healthyNodes = getHealthyNodes();
+
+  if (healthyNodes.length === 0) {
+    return {
+      leaderNode: null,
+      leaderStatus: null,
+      election: {
+        status: "failed",
+        reason: "No healthy nodes available",
+      },
+    };
+  }
+
+  const candidate = healthyNodes[0];
+
+  let highestTerm = 1;
+
+  const statuses = await Promise.all(
+    healthyNodes.map(async (node) => {
+      try {
+        const status = await getRaftStatus(node);
+        highestTerm = Math.max(highestTerm, status.currentTerm || 1);
+
+        return {
+          node,
+          status,
+        };
+      } catch (error) {
+        markNodeFailure(node, error);
+        return null;
+      }
+    }),
+  );
+
+  const newTerm = highestTerm + 1;
+
+  try {
+    const leaderResponse = await axios.post(
+      `${candidate.url}/raft/become-leader`,
+      { term: newTerm },
+      { timeout: HEALTH_CHECK_TIMEOUT_MS },
+    );
+
+    await Promise.all(
+      statuses
+        .filter((item) => item && item.node.id !== candidate.id)
+        .map(async (item) => {
+          try {
+            await axios.post(
+              `${item.node.url}/raft/become-follower`,
+              {
+                leaderId: candidate.id,
+                term: newTerm,
+              },
+              { timeout: HEALTH_CHECK_TIMEOUT_MS },
+            );
+          } catch (error) {
+            markNodeFailure(item.node, error);
+          }
+        }),
+    );
+
+    return {
+      leaderNode: candidate,
+      leaderStatus: leaderResponse.data,
+      election: {
+        status: "success",
+        newLeader: candidate.id,
+        term: newTerm,
+      },
+    };
+  } catch (error) {
+    markNodeFailure(candidate, error);
+
+    return {
+      leaderNode: null,
+      leaderStatus: null,
+      election: {
+        status: "failed",
+        reason: error.code || error.message,
+      },
+    };
+  }
+}
+
+async function getOrElectLeader() {
+  const currentLeader = await discoverCurrentLeader();
+
+  if (currentLeader.leaderNode) {
+    return {
+      ...currentLeader,
+      election: {
+        status: "not-needed",
+        leader: currentLeader.leaderNode.id,
+      },
+    };
+  }
+
+  return electNewLeader();
+}
+
 async function proxyPostToLeader(path, body) {
-  const { leaderNode, leaderStatus } = await discoverLeaderNode();
+  const { leaderNode, leaderStatus, election } = await getOrElectLeader();
 
   if (!leaderNode) {
     return {
       statusCode: 503,
       data: {
         error: "No Raft leader available",
+        election,
       },
     };
   }
@@ -248,6 +357,7 @@ async function proxyPostToLeader(path, body) {
       routingStrategy: "leader-aware-routing",
       selectedNode: leaderNode.id,
       leaderTerm: leaderStatus.currentTerm,
+      election,
       timestamp: new Date().toISOString(),
     };
 
@@ -259,6 +369,7 @@ async function proxyPostToLeader(path, body) {
         selectedNode: leaderNode.id,
         leader: leaderNode.id,
         leaderTerm: leaderStatus.currentTerm,
+        election,
         response: response.data,
       },
     };
@@ -270,19 +381,21 @@ async function proxyPostToLeader(path, body) {
       data: {
         error: "Failed to reach Raft leader",
         selectedNode: leaderNode.id,
+        election,
       },
     };
   }
 }
 
 async function proxyDeleteToLeader(path) {
-  const { leaderNode, leaderStatus } = await discoverLeaderNode();
+  const { leaderNode, leaderStatus, election } = await getOrElectLeader();
 
   if (!leaderNode) {
     return {
       statusCode: 503,
       data: {
         error: "No Raft leader available",
+        election,
       },
     };
   }
@@ -301,6 +414,7 @@ async function proxyDeleteToLeader(path) {
       routingStrategy: "leader-aware-routing",
       selectedNode: leaderNode.id,
       leaderTerm: leaderStatus.currentTerm,
+      election,
       timestamp: new Date().toISOString(),
     };
 
@@ -312,6 +426,7 @@ async function proxyDeleteToLeader(path) {
         selectedNode: leaderNode.id,
         leader: leaderNode.id,
         leaderTerm: leaderStatus.currentTerm,
+        election,
         response: response.data,
       },
     };
@@ -323,6 +438,7 @@ async function proxyDeleteToLeader(path) {
       data: {
         error: "Failed to reach Raft leader",
         selectedNode: leaderNode.id,
+        election,
       },
     };
   }
@@ -621,6 +737,26 @@ app.post("/lb/reset-stats", (req, res) => {
   res.json({
     status: "reset",
     message: "Load balancer statistics were reset",
+  });
+});
+
+app.post("/raft/elect-leader", async (req, res) => {
+  await refreshHealthChecks();
+
+  const result = await getOrElectLeader();
+
+  if (!result.leaderNode) {
+    return res.status(503).json({
+      error: "Leader election failed",
+      election: result.election,
+    });
+  }
+
+  res.json({
+    status: "leader-ready",
+    leader: result.leaderNode.id,
+    leaderStatus: result.leaderStatus,
+    election: result.election,
   });
 });
 
