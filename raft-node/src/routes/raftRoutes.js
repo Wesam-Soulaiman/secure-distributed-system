@@ -5,12 +5,9 @@ const { raftState } = require("../state/raftState");
 const { store } = require("../state/store");
 const { getStoreKeys } = require("../services/storeService");
 
-const { appendEntryFromLeader } = require("../services/raftService");
-
 const {
   handleRequestVote,
   handleAppendEntries,
-  resetElectionTimer,
 } = require("../services/consensusService");
 
 const router = express.Router();
@@ -47,16 +44,6 @@ router.post("/raft/request-vote", (req, res) => {
 
 router.post("/raft/append-entries", (req, res) => {
   const result = handleAppendEntries(req.body);
-  res.status(result.statusCode).json(result.data);
-});
-
-router.post("/raft/append-entry", (req, res) => {
-  const result = appendEntryFromLeader(req.body);
-
-  if (result.statusCode === 200) {
-    resetElectionTimer();
-  }
-
   res.status(result.statusCode).json(result.data);
 });
 

@@ -11,6 +11,12 @@ const {
 
 const { raftState } = require("../state/raftState");
 
+const {
+  getEntryByIndex,
+  getLastLogIndex,
+  advanceCommitIndex,
+} = require("./stateMachineService");
+
 let electionTimer = null;
 let heartbeatTimer = null;
 
@@ -26,18 +32,20 @@ function randomElectionTimeout() {
 }
 
 function getLastLogInformation() {
-  if (raftState.log.length === 0) {
+  const lastLogIndex = getLastLogIndex();
+
+  if (lastLogIndex === 0) {
     return {
       lastLogIndex: 0,
       lastLogTerm: 0,
     };
   }
 
-  const lastEntry = raftState.log[raftState.log.length - 1];
+  const lastEntry = getEntryByIndex(lastLogIndex);
 
   return {
-    lastLogIndex: lastEntry.index,
-    lastLogTerm: lastEntry.term,
+    lastLogIndex,
+    lastLogTerm: lastEntry ? lastEntry.term : 0,
   };
 }
 
@@ -118,7 +126,6 @@ function resetElectionTimer() {
   electionTimer = setTimeout(() => {
     startElection().catch((error) => {
       console.error(`[${NODE_ID}] Election failed:`, error.message);
-
       resetElectionTimer();
     });
   }, timeout);
@@ -253,7 +260,6 @@ function handleRequestVote({
   if (voteGranted) {
     raftState.votedFor = candidateId;
     raftState.leaderId = null;
-
     resetElectionTimer();
   }
 
@@ -273,15 +279,36 @@ function handleRequestVote({
   };
 }
 
+function getLastLogInfoForHeartbeat() {
+  const lastLogIndex = getLastLogIndex();
+
+  if (lastLogIndex === 0) {
+    return {
+      prevLogIndex: 0,
+      prevLogTerm: 0,
+    };
+  }
+
+  const lastEntry = getEntryByIndex(lastLogIndex);
+
+  return {
+    prevLogIndex: lastLogIndex,
+    prevLogTerm: lastEntry ? lastEntry.term : 0,
+  };
+}
+
 async function sendHeartbeatToPeer(peer) {
+  const { prevLogIndex, prevLogTerm } = getLastLogInfoForHeartbeat();
+
   try {
     const response = await axios.post(
       `${peer.url}/raft/append-entries`,
       {
         term: raftState.currentTerm,
         leaderId: NODE_ID,
+        prevLogIndex,
+        prevLogTerm,
         entries: [],
-
         leaderCommit: raftState.commitIndex,
       },
       {
@@ -346,9 +373,56 @@ function startHeartbeat() {
   }, HEARTBEAT_INTERVAL_MS);
 }
 
+function logMatchesAt(prevLogIndex, prevLogTerm) {
+  if (prevLogIndex === 0) {
+    return true;
+  }
+
+  const previousEntry = getEntryByIndex(prevLogIndex);
+
+  if (!previousEntry) {
+    return false;
+  }
+
+  return previousEntry.term === prevLogTerm;
+}
+
+function appendEntriesToLocalLog(entries) {
+  for (const entry of entries) {
+    const existingEntryIndex = raftState.log.findIndex(
+      (localEntry) => localEntry.index === entry.index,
+    );
+
+    if (existingEntryIndex !== -1) {
+      const existingEntry = raftState.log[existingEntryIndex];
+
+      if (existingEntry.term !== entry.term) {
+        raftState.log = raftState.log.slice(0, existingEntryIndex);
+        raftState.log.push({
+          ...entry,
+          status: "pending",
+          replicatedBy: raftState.leaderId,
+          receivedAt: new Date().toISOString(),
+        });
+      }
+    } else {
+      raftState.log.push({
+        ...entry,
+        status: "pending",
+        replicatedBy: raftState.leaderId,
+        receivedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  raftState.log.sort((a, b) => a.index - b.index);
+}
+
 function handleAppendEntries({
   term,
   leaderId,
+  prevLogIndex = 0,
+  prevLogTerm = 0,
   entries = [],
   leaderCommit = 0,
 }) {
@@ -377,13 +451,27 @@ function handleAppendEntries({
 
   raftState.lastHeartbeatAt = new Date().toISOString();
 
-  if (entries.length > 0) {
-    console.log(
-      `[${NODE_ID}] Received ${entries.length} entries through append-entries`,
-    );
+  if (!logMatchesAt(prevLogIndex, prevLogTerm)) {
+    return {
+      statusCode: 200,
+      data: {
+        term: raftState.currentTerm,
+        success: false,
+        nodeId: NODE_ID,
+        reason: "previous log entry does not match",
+        conflictIndex: prevLogIndex,
+      },
+    };
   }
 
-  raftState.commitIndex = Math.max(raftState.commitIndex, leaderCommit);
+  appendEntriesToLocalLog(entries);
+
+  if (leaderCommit > raftState.commitIndex) {
+    advanceCommitIndex(leaderCommit);
+  }
+
+  const lastMatchedIndex =
+    entries.length > 0 ? entries[entries.length - 1].index : prevLogIndex;
 
   return {
     statusCode: 200,
@@ -394,6 +482,8 @@ function handleAppendEntries({
       role: raftState.role,
       leaderId: raftState.leaderId,
       commitIndex: raftState.commitIndex,
+      lastApplied: raftState.lastApplied,
+      matchIndex: lastMatchedIndex,
     },
   };
 }
