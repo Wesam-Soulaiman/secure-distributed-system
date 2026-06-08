@@ -37,7 +37,7 @@ services:
     environment:
       - PORT=8000
       - NODE_ID=node-a
-      - INITIAL_ROLE=leader
+      - INITIAL_ROLE=follower
     networks:
       - distributed-net
 
