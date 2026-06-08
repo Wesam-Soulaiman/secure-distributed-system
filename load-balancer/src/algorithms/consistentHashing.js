@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { VIRTUAL_NODES_PER_WEIGHT } = require("../config");
-const { getHealthyNodes } = require("../state/nodes");
+const { getRoutableNodes } = require("../state/nodes");
 
 function hashString(input) {
   const hex = crypto.createHash("sha1").update(input).digest("hex").slice(0, 8);
@@ -10,7 +10,7 @@ function hashString(input) {
 function buildHashRing() {
   const ring = [];
 
-  getHealthyNodes().forEach((node) => {
+  getRoutableNodes().forEach((node) => {
     const virtualNodeCount = node.weight * VIRTUAL_NODES_PER_WEIGHT;
 
     for (let i = 0; i < virtualNodeCount; i += 1) {

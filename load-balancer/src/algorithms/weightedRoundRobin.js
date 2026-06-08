@@ -1,4 +1,4 @@
-const { getHealthyNodes } = require("../state/nodes");
+const { getRoutableNodes } = require("../state/nodes");
 
 let weightedSequence = [];
 let weightedIndex = 0;
@@ -6,9 +6,9 @@ let weightedIndex = 0;
 function rebuildWeightedSequence() {
   weightedSequence = [];
 
-  const healthyNodes = getHealthyNodes();
+  const routableNodes = getRoutableNodes();
 
-  healthyNodes.forEach((node) => {
+  routableNodes.forEach((node) => {
     for (let i = 0; i < node.weight; i += 1) {
       weightedSequence.push(node);
     }

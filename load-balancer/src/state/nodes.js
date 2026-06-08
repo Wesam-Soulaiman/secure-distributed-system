@@ -1,5 +1,13 @@
 const { FAILURE_THRESHOLD } = require("../config");
 
+const {
+  initializeCircuitBreaker,
+  isNodeRoutable,
+  recordCircuitSuccess,
+  recordCircuitFailure,
+  formatCircuitBreaker,
+} = require("../services/circuitBreakerService");
+
 const nodes = [
   {
     id: "node-a",
@@ -36,6 +44,14 @@ const nodes = [
   },
 ];
 
+nodes.forEach((node) => {
+  initializeCircuitBreaker(node);
+});
+
+function getRoutableNodes() {
+  return nodes.filter((node) => isNodeRoutable(node));
+}
+
 function getHealthyNodes() {
   return nodes.filter((node) => node.healthy);
 }
@@ -45,11 +61,16 @@ function markNodeSuccess(node) {
   node.failureCount = 0;
   node.healthy = true;
   node.lastHealthError = null;
+
+  recordCircuitSuccess(node);
 }
 
 function markNodeFailure(node, error) {
   node.failureCount += 1;
+
   node.lastHealthError = error.code || error.message;
+
+  recordCircuitFailure(node, error);
 
   if (node.failureCount >= FAILURE_THRESHOLD) {
     node.healthy = false;
@@ -62,7 +83,6 @@ function resetNodeStats() {
     node.failureCount = 0;
     node.successCount = 0;
     node.lastHealthError = null;
-    node.healthy = true;
   });
 }
 
@@ -71,19 +91,26 @@ function formatNodeForStatus(node) {
     id: node.id,
     url: node.url,
     weight: node.weight,
+
     healthy: node.healthy,
-    includedInRouting: node.healthy,
+    includedInRouting: isNodeRoutable(node),
+
     requestCount: node.requestCount,
+
     lastHealthCheck: node.lastHealthCheck,
     lastHealthError: node.lastHealthError,
+
     failureCount: node.failureCount,
     successCount: node.successCount,
+
+    circuitBreaker: formatCircuitBreaker(node),
   };
 }
 
 module.exports = {
   nodes,
   getHealthyNodes,
+  getRoutableNodes,
   markNodeSuccess,
   markNodeFailure,
   resetNodeStats,

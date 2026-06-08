@@ -9,6 +9,8 @@ const { getHealthyNodes, markNodeFailure } = require("../state/nodes");
 
 const { executeWithExponentialBackoff } = require("./retryService");
 
+const { canSendRequest } = require("./circuitBreakerService");
+
 async function getRaftStatus(node) {
   const response = await axios.get(`${node.url}/raft/status`, {
     timeout: HEALTH_CHECK_TIMEOUT_MS,
@@ -22,6 +24,15 @@ async function discoverCurrentLeaderOnce() {
 
   const statuses = await Promise.all(
     healthyNodes.map(async (node) => {
+      if (!canSendRequest(node)) {
+        return {
+          node,
+          status: null,
+          reachable: false,
+          skippedByCircuitBreaker: true,
+          error: "circuit breaker is open",
+        };
+      }
       try {
         const status = await getRaftStatus(node);
 
@@ -57,6 +68,7 @@ async function discoverCurrentLeaderOnce() {
         role: item.status?.role || null,
         term: item.status?.currentTerm ?? null,
         error: item.error || null,
+        skippedByCircuitBreaker: item.skippedByCircuitBreaker || false,
       })),
     };
   }
@@ -70,6 +82,7 @@ async function discoverCurrentLeaderOnce() {
       role: item.status?.role || null,
       term: item.status?.currentTerm ?? null,
       error: item.error || null,
+      skippedByCircuitBreaker: item.skippedByCircuitBreaker || false,
     })),
   };
 }
