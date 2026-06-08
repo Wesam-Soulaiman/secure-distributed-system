@@ -32,6 +32,8 @@ router.get("/raft/log", (req, res) => {
     electionCount: raftState.electionCount,
     lastHeartbeatAt: raftState.lastHeartbeatAt,
     lastElectionAt: raftState.lastElectionAt,
+    nextIndex: raftState.nextIndex,
+    matchIndex: raftState.matchIndex,
     log: raftState.log,
     store,
   });

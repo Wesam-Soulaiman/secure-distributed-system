@@ -3,41 +3,42 @@ const axios = require("axios");
 const { NODE_ID, PEERS, REPLICATION_TIMEOUT_MS } = require("../config");
 
 const { raftState } = require("../state/raftState");
+
 const { getEntryByIndex, getLastLogIndex } = require("./stateMachineService");
 
-function getPreviousLogInfoForEntry(entry) {
-  const prevLogIndex = entry.index - 1;
+function initializeLeaderReplicationState() {
+  const nextLogIndex = getLastLogIndex() + 1;
 
-  if (prevLogIndex === 0) {
-    return {
-      prevLogIndex: 0,
-      prevLogTerm: 0,
-    };
-  }
+  raftState.nextIndex = {};
+  raftState.matchIndex = {};
 
-  const previousEntry = getEntryByIndex(prevLogIndex);
-
-  return {
-    prevLogIndex,
-    prevLogTerm: previousEntry ? previousEntry.term : 0,
-  };
+  PEERS.forEach((peer) => {
+    raftState.nextIndex[peer.id] = nextLogIndex;
+    raftState.matchIndex[peer.id] = 0;
+  });
 }
 
-function getLastLogInfo() {
-  const lastLogIndex = getLastLogIndex();
+function getPeerNextIndex(peerId) {
+  const defaultNextIndex = getLastLogIndex() + 1;
 
-  if (lastLogIndex === 0) {
-    return {
-      prevLogIndex: 0,
-      prevLogTerm: 0,
-    };
-  }
+  return raftState.nextIndex[peerId] || defaultNextIndex;
+}
 
-  const lastEntry = getEntryByIndex(lastLogIndex);
+function createAppendEntriesPayload(peerId) {
+  const nextIndex = getPeerNextIndex(peerId);
+  const prevLogIndex = Math.max(0, nextIndex - 1);
+
+  const previousEntry = prevLogIndex > 0 ? getEntryByIndex(prevLogIndex) : null;
+
+  const entries = raftState.log.filter((entry) => entry.index >= nextIndex);
 
   return {
-    prevLogIndex: lastLogIndex,
-    prevLogTerm: lastEntry ? lastEntry.term : 0,
+    term: raftState.currentTerm,
+    leaderId: NODE_ID,
+    prevLogIndex,
+    prevLogTerm: previousEntry ? previousEntry.term : 0,
+    entries,
+    leaderCommit: raftState.commitIndex,
   };
 }
 
@@ -53,57 +54,107 @@ async function sendAppendEntriesToPeer(peer, payload) {
 
     return {
       peer: peer.id,
-      success: response.data.success === true,
+      networkSuccess: true,
       response: response.data,
     };
   } catch (error) {
     return {
       peer: peer.id,
+      networkSuccess: false,
       success: false,
       error: error.code || error.message,
     };
   }
 }
 
-async function replicateEntryToFollowers(entry) {
-  const { prevLogIndex, prevLogTerm } = getPreviousLogInfoForEntry(entry);
+function reduceNextIndex(peerId, response) {
+  const currentNextIndex = getPeerNextIndex(peerId);
 
-  const payload = {
-    term: raftState.currentTerm,
-    leaderId: NODE_ID,
-    prevLogIndex,
-    prevLogTerm,
-    entries: [entry],
-    leaderCommit: raftState.commitIndex,
-  };
+  const suggestedIndex = Number(response?.conflictIndex);
 
-  const results = await Promise.all(
-    PEERS.map((peer) => sendAppendEntriesToPeer(peer, payload)),
-  );
+  if (
+    Number.isInteger(suggestedIndex) &&
+    suggestedIndex >= 1 &&
+    suggestedIndex < currentNextIndex
+  ) {
+    raftState.nextIndex[peerId] = suggestedIndex;
+    return;
+  }
 
-  return results;
+  raftState.nextIndex[peerId] = Math.max(1, currentNextIndex - 1);
 }
 
-async function replicateCommitIndexToFollowers() {
-  const { prevLogIndex, prevLogTerm } = getLastLogInfo();
+async function replicateToPeer(peer) {
+  const maximumAttempts = getLastLogIndex() + 2;
+  let attempts = 0;
 
-  const payload = {
-    term: raftState.currentTerm,
-    leaderId: NODE_ID,
-    prevLogIndex,
-    prevLogTerm,
-    entries: [],
-    leaderCommit: raftState.commitIndex,
+  while (raftState.role === "leader" && attempts < maximumAttempts) {
+    attempts += 1;
+
+    const payload = createAppendEntriesPayload(peer.id);
+
+    const result = await sendAppendEntriesToPeer(peer, payload);
+
+    if (!result.networkSuccess) {
+      return {
+        peer: peer.id,
+        success: false,
+        error: result.error,
+        attempts,
+      };
+    }
+
+    const responseTerm = result.response?.term || 0;
+
+    if (responseTerm > raftState.currentTerm) {
+      return {
+        peer: peer.id,
+        success: false,
+        higherTerm: responseTerm,
+        error: "Follower has a higher term",
+        attempts,
+      };
+    }
+
+    if (result.response?.success === true) {
+      const lastSentIndex =
+        payload.entries.length > 0
+          ? payload.entries[payload.entries.length - 1].index
+          : payload.prevLogIndex;
+
+      const matchedIndex = result.response.matchIndex ?? lastSentIndex;
+
+      raftState.matchIndex[peer.id] = matchedIndex;
+      raftState.nextIndex[peer.id] = matchedIndex + 1;
+
+      return {
+        peer: peer.id,
+        success: true,
+        matchIndex: matchedIndex,
+        nextIndex: raftState.nextIndex[peer.id],
+        attempts,
+      };
+    }
+
+    reduceNextIndex(peer.id, result.response);
+  }
+
+  return {
+    peer: peer.id,
+    success: false,
+    error: "Maximum replication attempts reached",
+    attempts,
+    nextIndex: getPeerNextIndex(peer.id),
   };
+}
 
-  const results = await Promise.all(
-    PEERS.map((peer) => sendAppendEntriesToPeer(peer, payload)),
-  );
-
-  return results;
+async function replicateLogToFollowers() {
+  return Promise.all(PEERS.map((peer) => replicateToPeer(peer)));
 }
 
 module.exports = {
-  replicateEntryToFollowers,
-  replicateCommitIndexToFollowers,
+  initializeLeaderReplicationState,
+  createAppendEntriesPayload,
+  replicateToPeer,
+  replicateLogToFollowers,
 };

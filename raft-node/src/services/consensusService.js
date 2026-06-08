@@ -17,6 +17,11 @@ const {
   advanceCommitIndex,
 } = require("./stateMachineService");
 
+const {
+  initializeLeaderReplicationState,
+  replicateLogToFollowers,
+} = require("./replicationService");
+
 let electionTimer = null;
 let heartbeatTimer = null;
 
@@ -74,6 +79,9 @@ function becomeFollower(term, leaderId = null) {
   raftState.role = "follower";
   raftState.leaderId = leaderId;
 
+  raftState.nextIndex = {};
+  raftState.matchIndex = {};
+
   resetElectionTimer();
 }
 
@@ -95,6 +103,8 @@ function becomeLeader() {
   raftState.leaderId = NODE_ID;
   raftState.votedFor = NODE_ID;
   raftState.lastHeartbeatAt = null;
+
+  initializeLeaderReplicationState();
 
   startHeartbeat();
 }
@@ -297,61 +307,20 @@ function getLastLogInfoForHeartbeat() {
   };
 }
 
-async function sendHeartbeatToPeer(peer) {
-  const { prevLogIndex, prevLogTerm } = getLastLogInfoForHeartbeat();
-
-  try {
-    const response = await axios.post(
-      `${peer.url}/raft/append-entries`,
-      {
-        term: raftState.currentTerm,
-        leaderId: NODE_ID,
-        prevLogIndex,
-        prevLogTerm,
-        entries: [],
-        leaderCommit: raftState.commitIndex,
-      },
-      {
-        timeout: REPLICATION_TIMEOUT_MS,
-      },
-    );
-
-    return {
-      peerId: peer.id,
-      success: true,
-      data: response.data,
-    };
-  } catch (error) {
-    return {
-      peerId: peer.id,
-      success: false,
-      error: error.code || error.message,
-    };
-  }
-}
-
 async function sendHeartbeats() {
   if (raftState.role !== "leader") {
     return;
   }
 
-  const heartbeatTerm = raftState.currentTerm;
+  const results = await replicateLogToFollowers();
 
-  const results = await Promise.all(
-    PEERS.map((peer) => sendHeartbeatToPeer(peer)),
+  const higherTerm = results.reduce(
+    (highestTerm, result) => Math.max(highestTerm, result.higherTerm || 0),
+    0,
   );
 
-  for (const result of results) {
-    if (!result.success) {
-      continue;
-    }
-
-    const responseTerm = result.data.term || 0;
-
-    if (responseTerm > heartbeatTerm) {
-      becomeFollower(responseTerm);
-      return;
-    }
+  if (higherTerm > raftState.currentTerm) {
+    becomeFollower(higherTerm);
   }
 }
 
@@ -373,18 +342,52 @@ function startHeartbeat() {
   }, HEARTBEAT_INTERVAL_MS);
 }
 
-function logMatchesAt(prevLogIndex, prevLogTerm) {
+function validatePreviousLogEntry(prevLogIndex, prevLogTerm) {
   if (prevLogIndex === 0) {
-    return true;
+    return {
+      matches: true,
+      conflictIndex: null,
+    };
+  }
+
+  const lastLocalIndex = getLastLogIndex();
+
+  if (prevLogIndex > lastLocalIndex) {
+    return {
+      matches: false,
+      conflictIndex: lastLocalIndex + 1,
+      reason: "follower log is shorter",
+    };
   }
 
   const previousEntry = getEntryByIndex(prevLogIndex);
 
   if (!previousEntry) {
-    return false;
+    return {
+      matches: false,
+      conflictIndex: lastLocalIndex + 1,
+      reason: "previous entry is missing",
+    };
   }
 
-  return previousEntry.term === prevLogTerm;
+  if (previousEntry.term !== prevLogTerm) {
+    const conflictingTerm = previousEntry.term;
+
+    const firstEntryWithConflictingTerm = raftState.log.find(
+      (entry) => entry.term === conflictingTerm,
+    );
+
+    return {
+      matches: false,
+      conflictIndex: firstEntryWithConflictingTerm?.index || prevLogIndex,
+      reason: "previous entry term does not match",
+    };
+  }
+
+  return {
+    matches: true,
+    conflictIndex: null,
+  };
 }
 
 function appendEntriesToLocalLog(entries) {
@@ -451,15 +454,17 @@ function handleAppendEntries({
 
   raftState.lastHeartbeatAt = new Date().toISOString();
 
-  if (!logMatchesAt(prevLogIndex, prevLogTerm)) {
+  const validation = validatePreviousLogEntry(prevLogIndex, prevLogTerm);
+
+  if (!validation.matches) {
     return {
       statusCode: 200,
       data: {
         term: raftState.currentTerm,
         success: false,
         nodeId: NODE_ID,
-        reason: "previous log entry does not match",
-        conflictIndex: prevLogIndex,
+        reason: validation.reason,
+        conflictIndex: validation.conflictIndex,
       },
     };
   }

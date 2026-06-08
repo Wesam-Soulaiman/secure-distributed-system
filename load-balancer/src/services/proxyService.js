@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { HEALTH_CHECK_TIMEOUT_MS } = require("../config");
+const { HEALTH_CHECK_TIMEOUT_MS, RAFT_WRITE_TIMEOUT_MS } = require("../config");
 const { markNodeSuccess, markNodeFailure } = require("../state/nodes");
 const {
   pickNodeWeightedRoundRobin,
@@ -132,7 +132,7 @@ async function proxyPostToLeader(path, body) {
 
   try {
     const response = await axios.post(`${leaderNode.url}${path}`, body, {
-      timeout: HEALTH_CHECK_TIMEOUT_MS,
+      timeout: RAFT_WRITE_TIMEOUT_MS,
     });
 
     leaderNode.requestCount += 1;
@@ -187,7 +187,7 @@ async function proxyDeleteToLeader(path) {
 
   try {
     const response = await axios.delete(`${leaderNode.url}${path}`, {
-      timeout: HEALTH_CHECK_TIMEOUT_MS,
+      timeout: RAFT_WRITE_TIMEOUT_MS,
     });
 
     leaderNode.requestCount += 1;
