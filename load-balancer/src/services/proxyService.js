@@ -5,7 +5,7 @@ const {
   pickNodeWeightedRoundRobin,
 } = require("../algorithms/weightedRoundRobin");
 const { pickNodeByConsistentHash } = require("../algorithms/consistentHashing");
-const { discoverCurrentLeader } = require("./leaderService");
+const { discoverCurrentLeaderWithRetry } = require("./leaderService");
 const { setLastRoutedRequest } = require("../state/routingState");
 
 async function proxyGetToSelectedNode(path) {
@@ -117,15 +117,17 @@ async function proxyGetByConsistentHash(key) {
 }
 
 async function proxyPostToLeader(path, body) {
-  const { leaderNode, leaderStatus } = await discoverCurrentLeader();
+  const { leaderNode, leaderStatus, retry } =
+    await discoverCurrentLeaderWithRetry();
 
   if (!leaderNode) {
     return {
       statusCode: 503,
       data: {
         error: "No Raft leader is currently available",
-        reason: "Raft election may still be in progress",
-        retryAfterMs: 1000,
+        reason:
+          "The cluster did not elect a leader before retry attempts were exhausted",
+        retry,
       },
     };
   }
@@ -144,6 +146,7 @@ async function proxyPostToLeader(path, body) {
       routingStrategy: "leader-aware-routing",
       selectedNode: leaderNode.id,
       leaderTerm: leaderStatus.currentTerm,
+      retryAttempts: retry.totalAttempts,
       timestamp: new Date().toISOString(),
     });
 
@@ -155,10 +158,23 @@ async function proxyPostToLeader(path, body) {
         selectedNode: leaderNode.id,
         leader: leaderNode.id,
         leaderTerm: leaderStatus.currentTerm,
+
+        retry: {
+          strategy: "exponential-backoff",
+          leaderDiscoveryAttempts: retry.totalAttempts,
+          attempts: retry.attempts,
+        },
+
         response: response.data,
       },
     };
   } catch (error) {
+    const responseStatus = error.response?.status;
+
+    if (responseStatus === 409) {
+      return retryWriteAfterStaleLeader(path, body, leaderNode, error);
+    }
+
     markNodeFailure(leaderNode, error);
 
     return {
@@ -166,21 +182,34 @@ async function proxyPostToLeader(path, body) {
       data: {
         error: "Failed to reach Raft leader",
         selectedNode: leaderNode.id,
+
+        ambiguousWriteResult: !error.response,
+
+        reason: error.response
+          ? error.response.data
+          : "The request may have reached the leader, so it was not automatically retried",
+
+        retry: {
+          strategy: "exponential-backoff",
+          leaderDiscoveryAttempts: retry.totalAttempts,
+        },
       },
     };
   }
 }
 
 async function proxyDeleteToLeader(path) {
-  const { leaderNode, leaderStatus } = await discoverCurrentLeader();
+  const { leaderNode, leaderStatus, retry } =
+    await discoverCurrentLeaderWithRetry();
 
   if (!leaderNode) {
     return {
       statusCode: 503,
       data: {
         error: "No Raft leader is currently available",
-        reason: "Raft election may still be in progress",
-        retryAfterMs: 1000,
+        reason:
+          "The cluster did not elect a leader before retry attempts were exhausted",
+        retry,
       },
     };
   }
@@ -199,6 +228,7 @@ async function proxyDeleteToLeader(path) {
       routingStrategy: "leader-aware-routing",
       selectedNode: leaderNode.id,
       leaderTerm: leaderStatus.currentTerm,
+      retryAttempts: retry.totalAttempts,
       timestamp: new Date().toISOString(),
     });
 
@@ -210,6 +240,13 @@ async function proxyDeleteToLeader(path) {
         selectedNode: leaderNode.id,
         leader: leaderNode.id,
         leaderTerm: leaderStatus.currentTerm,
+
+        retry: {
+          strategy: "exponential-backoff",
+          leaderDiscoveryAttempts: retry.totalAttempts,
+          attempts: retry.attempts,
+        },
+
         response: response.data,
       },
     };
@@ -217,10 +254,12 @@ async function proxyDeleteToLeader(path) {
     markNodeFailure(leaderNode, error);
 
     return {
-      statusCode: 502,
+      statusCode: error.response?.status || 502,
       data: {
         error: "Failed to reach Raft leader",
         selectedNode: leaderNode.id,
+        ambiguousWriteResult: !error.response,
+        message: error.response?.data || error.message,
       },
     };
   }
