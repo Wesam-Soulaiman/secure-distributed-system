@@ -162,41 +162,9 @@ function appendEntryFromLeader({ leaderId, term, entry, leaderCommit }) {
   };
 }
 
-function becomeLeader(term) {
-  raftState.role = "leader";
-  raftState.currentTerm = term || raftState.currentTerm + 1;
-  raftState.leaderId = NODE_ID;
-  raftState.votedFor = NODE_ID;
-
-  return {
-    status: "became-leader",
-    nodeId: NODE_ID,
-    role: raftState.role,
-    currentTerm: raftState.currentTerm,
-    leaderId: raftState.leaderId,
-  };
-}
-
-function becomeFollower({ leaderId, term }) {
-  raftState.role = "follower";
-  raftState.currentTerm = term || raftState.currentTerm;
-  raftState.leaderId = leaderId || raftState.leaderId;
-  raftState.votedFor = null;
-
-  return {
-    status: "became-follower",
-    nodeId: NODE_ID,
-    role: raftState.role,
-    currentTerm: raftState.currentTerm,
-    leaderId: raftState.leaderId,
-  };
-}
-
 module.exports = {
   majorityCount,
   createLogEntry,
   handleLeaderWrite,
   appendEntryFromLeader,
-  becomeLeader,
-  becomeFollower,
 };

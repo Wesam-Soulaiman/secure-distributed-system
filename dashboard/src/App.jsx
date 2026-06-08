@@ -26,8 +26,6 @@ function App() {
   const [raftLogs, setRaftLogs] = useState(null);
   const [raftLogsLoading, setRaftLogsLoading] = useState(false);
 
-  const [electionResult, setElectionResult] = useState(null);
-
   async function fetchStatus() {
     setLoading(true);
 
@@ -144,23 +142,6 @@ function App() {
       await fetchStatus();
     } catch (error) {
       setPingResult({
-        error: error.message,
-        status: error.response?.status,
-        message: error.response?.data,
-      });
-    }
-  }
-
-  async function electLeader() {
-    try {
-      const response = await axios.post(`${API_BASE_URL}/raft/elect-leader`);
-
-      setElectionResult(response.data);
-
-      await fetchStatus();
-      await fetchRaftLogs();
-    } catch (error) {
-      setElectionResult({
         error: error.message,
         status: error.response?.status,
         message: error.response?.data,
@@ -596,25 +577,28 @@ Custom Load Balancer
         </div>
 
         <div className="card">
-          <h2>Raft Leader</h2>
+          <h2>Raft Leader Election</h2>
+
+          <p>
+            <strong>Election Mode:</strong> Automatic Node-Driven Election
+          </p>
 
           <p>
             <strong>Current Leader:</strong>{" "}
-            {clusterStatus?.raft?.currentLeader || "unknown"}
+            {clusterStatus?.raft?.currentLeader || "Election in progress..."}
           </p>
 
-          <button className="button primary" onClick={electLeader}>
-            Elect Leader
-          </button>
+          <p>
+            <strong>Current Term:</strong>{" "}
+            {clusterStatus?.raft?.nodes?.find(
+              (node) => node.raft?.role === "leader",
+            )?.raft?.currentTerm ?? "-"}
+          </p>
 
-          {electionResult && (
-            <>
-              <h3>Election Result</h3>
-              <pre className="output">
-                {JSON.stringify(electionResult, null, 2)}
-              </pre>
-            </>
-          )}
+          <p>
+            The Raft nodes elect their leader using randomized election timeouts
+            and RequestVote RPCs.
+          </p>
         </div>
       </section>
 

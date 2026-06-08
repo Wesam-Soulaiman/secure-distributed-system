@@ -40,7 +40,7 @@ router.get("/lb/status", (req, res) => {
     service: "custom-load-balancer",
     algorithm: "weighted-round-robin",
     keyBasedRouting: "consistent-hashing",
-    writeRouting: "raft-leader",
+    writeRouting: "auto-elected-raft-leader",
     healthCheckIntervalMs: HEALTH_CHECK_INTERVAL_MS,
     healthCheckTimeoutMs: HEALTH_CHECK_TIMEOUT_MS,
     failureThreshold: FAILURE_THRESHOLD,

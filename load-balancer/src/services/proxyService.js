@@ -5,7 +5,7 @@ const {
   pickNodeWeightedRoundRobin,
 } = require("../algorithms/weightedRoundRobin");
 const { pickNodeByConsistentHash } = require("../algorithms/consistentHashing");
-const { getOrElectLeader } = require("./leaderService");
+const { discoverCurrentLeader } = require("./leaderService");
 const { setLastRoutedRequest } = require("../state/routingState");
 
 async function proxyGetToSelectedNode(path) {
@@ -117,14 +117,15 @@ async function proxyGetByConsistentHash(key) {
 }
 
 async function proxyPostToLeader(path, body) {
-  const { leaderNode, leaderStatus, election } = await getOrElectLeader();
+  const { leaderNode, leaderStatus } = await discoverCurrentLeader();
 
   if (!leaderNode) {
     return {
       statusCode: 503,
       data: {
-        error: "No Raft leader available",
-        election,
+        error: "No Raft leader is currently available",
+        reason: "Raft election may still be in progress",
+        retryAfterMs: 1000,
       },
     };
   }
@@ -143,7 +144,6 @@ async function proxyPostToLeader(path, body) {
       routingStrategy: "leader-aware-routing",
       selectedNode: leaderNode.id,
       leaderTerm: leaderStatus.currentTerm,
-      election,
       timestamp: new Date().toISOString(),
     });
 
@@ -155,7 +155,6 @@ async function proxyPostToLeader(path, body) {
         selectedNode: leaderNode.id,
         leader: leaderNode.id,
         leaderTerm: leaderStatus.currentTerm,
-        election,
         response: response.data,
       },
     };
@@ -167,21 +166,21 @@ async function proxyPostToLeader(path, body) {
       data: {
         error: "Failed to reach Raft leader",
         selectedNode: leaderNode.id,
-        election,
       },
     };
   }
 }
 
 async function proxyDeleteToLeader(path) {
-  const { leaderNode, leaderStatus, election } = await getOrElectLeader();
+  const { leaderNode, leaderStatus } = await discoverCurrentLeader();
 
   if (!leaderNode) {
     return {
       statusCode: 503,
       data: {
-        error: "No Raft leader available",
-        election,
+        error: "No Raft leader is currently available",
+        reason: "Raft election may still be in progress",
+        retryAfterMs: 1000,
       },
     };
   }
@@ -200,7 +199,6 @@ async function proxyDeleteToLeader(path) {
       routingStrategy: "leader-aware-routing",
       selectedNode: leaderNode.id,
       leaderTerm: leaderStatus.currentTerm,
-      election,
       timestamp: new Date().toISOString(),
     });
 
@@ -212,7 +210,6 @@ async function proxyDeleteToLeader(path) {
         selectedNode: leaderNode.id,
         leader: leaderNode.id,
         leaderTerm: leaderStatus.currentTerm,
-        election,
         response: response.data,
       },
     };
@@ -224,7 +221,6 @@ async function proxyDeleteToLeader(path) {
       data: {
         error: "Failed to reach Raft leader",
         selectedNode: leaderNode.id,
-        election,
       },
     };
   }

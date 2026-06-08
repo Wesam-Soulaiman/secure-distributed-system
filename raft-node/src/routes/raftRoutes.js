@@ -5,11 +5,7 @@ const { raftState } = require("../state/raftState");
 const { store } = require("../state/store");
 const { getStoreKeys } = require("../services/storeService");
 
-const {
-  appendEntryFromLeader,
-  becomeLeader: legacyBecomeLeader,
-  becomeFollower: legacyBecomeFollower,
-} = require("../services/raftService");
+const { appendEntryFromLeader } = require("../services/raftService");
 
 const {
   handleRequestVote,
@@ -32,9 +28,13 @@ router.get("/raft/log", (req, res) => {
     nodeId: NODE_ID,
     role: raftState.role,
     currentTerm: raftState.currentTerm,
+    votedFor: raftState.votedFor,
     leaderId: raftState.leaderId,
     commitIndex: raftState.commitIndex,
     lastApplied: raftState.lastApplied,
+    electionCount: raftState.electionCount,
+    lastHeartbeatAt: raftState.lastHeartbeatAt,
+    lastElectionAt: raftState.lastElectionAt,
     log: raftState.log,
     store,
   });
@@ -58,18 +58,6 @@ router.post("/raft/append-entry", (req, res) => {
   }
 
   res.status(result.statusCode).json(result.data);
-});
-
-router.post("/raft/become-leader", (req, res) => {
-  const { term } = req.body;
-  const result = legacyBecomeLeader(term);
-  res.json(result);
-});
-
-router.post("/raft/become-follower", (req, res) => {
-  const result = legacyBecomeFollower(req.body);
-  resetElectionTimer();
-  res.json(result);
 });
 
 module.exports = router;

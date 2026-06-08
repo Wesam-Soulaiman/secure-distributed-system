@@ -86,6 +86,7 @@ function becomeLeader() {
   raftState.role = "leader";
   raftState.leaderId = NODE_ID;
   raftState.votedFor = NODE_ID;
+  raftState.lastHeartbeatAt = null;
 
   startHeartbeat();
 }

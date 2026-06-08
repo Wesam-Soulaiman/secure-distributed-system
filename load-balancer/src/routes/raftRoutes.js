@@ -3,30 +3,8 @@ const axios = require("axios");
 
 const { HEALTH_CHECK_TIMEOUT_MS } = require("../config");
 const { nodes, markNodeFailure } = require("../state/nodes");
-const { refreshHealthChecks } = require("../services/healthService");
-const { getOrElectLeader } = require("../services/leaderService");
 
 const router = express.Router();
-
-router.post("/raft/elect-leader", async (req, res) => {
-  await refreshHealthChecks();
-
-  const result = await getOrElectLeader();
-
-  if (!result.leaderNode) {
-    return res.status(503).json({
-      error: "Leader election failed",
-      election: result.election,
-    });
-  }
-
-  res.json({
-    status: "leader-ready",
-    leader: result.leaderNode.id,
-    leaderStatus: result.leaderStatus,
-    election: result.election,
-  });
-});
 
 router.get("/raft/logs", async (req, res) => {
   const logs = await Promise.all(
@@ -70,6 +48,7 @@ router.get("/raft/logs", async (req, res) => {
       leader: leader?.id || null,
       majority: Math.floor(nodes.length / 2) + 1,
       totalNodes: nodes.length,
+      electionMode: "automatic-node-driven",
     },
     logs,
   });
