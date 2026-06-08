@@ -16,13 +16,18 @@ function getEntryByIndex(index) {
 function applyCommittedEntries() {
   while (raftState.lastApplied < raftState.commitIndex) {
     const nextIndex = raftState.lastApplied + 1;
+
     const entry = getEntryByIndex(nextIndex);
 
     if (!entry) {
+      console.error(
+        `[${raftState.nodeId}] Cannot apply missing log entry ${nextIndex}`,
+      );
       break;
     }
 
     entry.status = "committed";
+
     applyEntryToStore(entry);
 
     raftState.lastApplied = nextIndex;
@@ -32,7 +37,13 @@ function applyCommittedEntries() {
 function advanceCommitIndex(newCommitIndex) {
   const lastLogIndex = getLastLogIndex();
 
-  raftState.commitIndex = Math.min(newCommitIndex, lastLogIndex);
+  const safeCommitIndex = Math.min(newCommitIndex, lastLogIndex);
+
+  if (safeCommitIndex <= raftState.commitIndex) {
+    return;
+  }
+
+  raftState.commitIndex = safeCommitIndex;
 
   applyCommittedEntries();
 }

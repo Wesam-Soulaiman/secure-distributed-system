@@ -1,16 +1,11 @@
-const { NODE_ID, PEERS } = require("../config");
+const { NODE_ID } = require("../config");
 const { raftState } = require("../state/raftState");
 
 const { replicateLogToFollowers } = require("./replicationService");
 
-const { applyCommittedEntries } = require("./stateMachineService");
+const { majorityCount, advanceLeaderCommitIndex } = require("./commitService");
 
 const { becomeFollower } = require("./consensusService");
-
-function majorityCount() {
-  const clusterSize = PEERS.length + 1;
-  return Math.floor(clusterSize / 2) + 1;
-}
 
 function createLogEntry(operation, key, value = null) {
   return {
@@ -30,6 +25,30 @@ function findHigherTerm(replicationResults) {
     (highestTerm, result) => Math.max(highestTerm, result.higherTerm || 0),
     0,
   );
+}
+
+function formatFailedReplicas(replicationResults, requiredEntryIndex) {
+  return replicationResults
+    .filter(
+      (result) =>
+        !result.success || (result.matchIndex || 0) < requiredEntryIndex,
+    )
+    .map((result) => ({
+      peer: result.peer,
+      error:
+        result.error ||
+        `Follower did not replicate entry ${requiredEntryIndex}`,
+      matchIndex: result.matchIndex || 0,
+    }));
+}
+
+function propagateCommitIndexInBackground() {
+  replicateLogToFollowers().catch((error) => {
+    console.error(
+      `[${NODE_ID}] Failed to propagate commit index:`,
+      error.message,
+    );
+  });
 }
 
 async function handleLeaderWrite(operation, key, value = null) {
@@ -65,26 +84,35 @@ async function handleLeaderWrite(operation, key, value = null) {
     };
   }
 
-  const successfulFollowers = replicationResults.filter(
-    (result) => result.success && result.matchIndex >= entry.index,
+  const commitResult = advanceLeaderCommitIndex();
+
+  const entryCommitted = raftState.commitIndex >= entry.index;
+
+  /*
+   * قد يقوم Heartbeat متزامن بتحديث commitIndex قبل أن تصل
+   * هذه الدالة إلى هنا. عندها تكون العملية committed فعلاً،
+   * حتى لو أعادت advanceLeaderCommitIndex قيمة advanced=false.
+   */
+  const normalizedCommitResult =
+    entryCommitted && !commitResult.advanced
+      ? {
+          ...commitResult,
+          entryAlreadyCommitted: true,
+          reason:
+            "entry was committed by a concurrent heartbeat or replication cycle",
+        }
+      : commitResult;
+
+  const replicatedFollowers = replicationResults.filter(
+    (result) => result.success && (result.matchIndex || 0) >= entry.index,
   );
 
-  const acknowledgements = 1 + successfulFollowers.length;
+  const acknowledgements = 1 + replicatedFollowers.length;
 
   const majority = majorityCount();
 
-  if (acknowledgements >= majority) {
-    entry.status = "committed";
-    raftState.commitIndex = entry.index;
-
-    applyCommittedEntries();
-
-    replicateLogToFollowers().catch((error) => {
-      console.error(
-        `[${NODE_ID}] Failed to propagate commit index:`,
-        error.message,
-      );
-    });
+  if (entryCommitted) {
+    propagateCommitIndexInBackground();
 
     return {
       statusCode: 200,
@@ -95,19 +123,26 @@ async function handleLeaderWrite(operation, key, value = null) {
         operation,
         key,
         value,
+
         acks: acknowledgements,
         majority,
-        replicatedTo: successfulFollowers.map((result) => result.peer),
-        failedReplicas: replicationResults
-          .filter((result) => !result.success)
-          .map((result) => ({
-            peer: result.peer,
-            error: result.error,
-          })),
+
+        replicatedTo: replicatedFollowers.map((result) => result.peer),
+
+        failedReplicas: formatFailedReplicas(replicationResults, entry.index),
+
         commitIndex: raftState.commitIndex,
         lastApplied: raftState.lastApplied,
+
+        commitRule: {
+          strategy: "majority-match-index",
+          currentTermOnly: true,
+          result: normalizedCommitResult,
+        },
+
         nextIndex: raftState.nextIndex,
         matchIndex: raftState.matchIndex,
+
         entry,
       },
     };
@@ -119,32 +154,39 @@ async function handleLeaderWrite(operation, key, value = null) {
     statusCode: 503,
     data: {
       status: "uncommitted",
-      error: "majority was not reached",
+      error: "entry is not replicated on a majority in the current term",
+
       leader: NODE_ID,
       term: raftState.currentTerm,
       operation,
       key,
       value,
+
       acks: acknowledgements,
       majority,
-      replicatedTo: successfulFollowers.map((result) => result.peer),
-      failedReplicas: replicationResults
-        .filter((result) => !result.success)
-        .map((result) => ({
-          peer: result.peer,
-          error: result.error,
-        })),
+
+      replicatedTo: replicatedFollowers.map((result) => result.peer),
+
+      failedReplicas: formatFailedReplicas(replicationResults, entry.index),
+
       commitIndex: raftState.commitIndex,
       lastApplied: raftState.lastApplied,
+
+      commitRule: {
+        strategy: "majority-match-index",
+        currentTermOnly: true,
+        result: commitResult,
+      },
+
       nextIndex: raftState.nextIndex,
       matchIndex: raftState.matchIndex,
+
       entry,
     },
   };
 }
 
 module.exports = {
-  majorityCount,
   createLogEntry,
   handleLeaderWrite,
 };

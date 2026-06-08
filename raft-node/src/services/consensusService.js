@@ -22,6 +22,8 @@ const {
   replicateLogToFollowers,
 } = require("./replicationService");
 
+const { advanceLeaderCommitIndex } = require("./commitService");
+
 let electionTimer = null;
 let heartbeatTimer = null;
 
@@ -321,6 +323,17 @@ async function sendHeartbeats() {
 
   if (higherTerm > raftState.currentTerm) {
     becomeFollower(higherTerm);
+    return;
+  }
+
+  const commitResult = advanceLeaderCommitIndex();
+
+  if (commitResult.advanced) {
+    console.log(
+      `[${NODE_ID}] Commit index advanced from ` +
+        `${commitResult.previousCommitIndex} to ` +
+        `${commitResult.commitIndex}`,
+    );
   }
 }
 

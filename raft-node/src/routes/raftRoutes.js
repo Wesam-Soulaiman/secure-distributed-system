@@ -29,6 +29,10 @@ router.get("/raft/log", (req, res) => {
     leaderId: raftState.leaderId,
     commitIndex: raftState.commitIndex,
     lastApplied: raftState.lastApplied,
+    commitRule: {
+      strategy: "majority-match-index",
+      currentTermOnly: true,
+    },
     electionCount: raftState.electionCount,
     lastHeartbeatAt: raftState.lastHeartbeatAt,
     lastElectionAt: raftState.lastElectionAt,
